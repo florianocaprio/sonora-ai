@@ -10,7 +10,7 @@ Ambiente verificato su MacBook Pro Apple M2 Max, 32 GB, macOS 27.2.1 ARM64, Pyth
 | Pipeline API con checkpoint DBS-TIGER DnR su CPU | Import, separazione, diagnostica, micro-gap, approvazione, mix e WAV PCM 24 bit verificati |
 | Pipeline API con DBS-TIGER DnR e Bandit V2 su MPS | Entrambi verificati su M2 Max. Input 48 kHz mono sintetico e checkpoint degli autori |
 | Chromium tramite Playwright, DBS-TIGER DnR su MPS | Progetto, import, playback reale, separazione, analisi, anteprima, approvazione, mix, export e riapertura verificati |
-| Docker Desktop Linux ARM64, API e worker | Immagine costruita, API healthy su loopback, runtime UID 10001. Checkpoint DBS-TIGER installato da upstream e verificato; Playwright CPU end-to-end con spettrogramma, riproduzione, mix ed export superato. Versioni, impostazioni, export e checkpoint ritrovati dopo stop e avvio senza build o pull |
+| Docker Desktop Linux ARM64, API e worker | Immagine costruita, API healthy su loopback, runtime UID 10001. Checkpoint DBS-TIGER e Bandit V2 installati da upstream e verificati. Entrambi superano Playwright CPU end-to-end con spettrogramma, riproduzione, mix ed export. Versioni, impostazioni, export e checkpoint ritrovati dopo stop e avvio senza build o pull |
 | Benchmark con riferimenti CineAudioDB su MPS | Confronto a parità di estratto stereo, riportato in [MODELS.md](MODELS.md) |
 
 Le fixture verificano conteggio campioni, ricampionamento, canali, residuo, picchi sopra il fondo scala, rumore, clipping probabile, hum, micro-gap e immutabilità fuori regione. Il test API ordinario non esegue inferenza. Il benchmark con stem di riferimento misura una clip e documenta la contaminazione tra musica ed effetti.
