@@ -26,7 +26,7 @@ class InpaintingTests(unittest.TestCase):
         sf.write(self.source, samples, rate, subtype="FLOAT")
 
     def test_catalog_matches_real_weights_and_missing_model(self):
-        (model,) = inpainting.list_models(self.root)
+        model = next(item for item in inpainting.list_models(self.root) if item["id"] == inpainting.MODEL_ID)
         self.assertEqual(model["task"], "inpainting")
         self.assertEqual(model["status"], "available")
         self.assertEqual(model["native_sample_rate"], 22050)

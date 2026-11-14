@@ -1,6 +1,9 @@
-import type { AutomationPoint, Region, Stem } from './api'
+import type { AutomationPoint, Region, Stem, TrackSettings } from './api'
 
 export type LiveStem = Exclude<Stem, 'master' | 'difference'>
+
+export type LiveChannelSettings = Pick<TrackSettings, 'trim_db' | 'eq' | 'compressor' | 'bypass'>
+export type LiveMasterSettings = LiveChannelSettings & Pick<TrackSettings, 'ceiling_dbtp' | 'limiter'>
 
 export interface LiveTrack {
   stem: LiveStem
@@ -11,6 +14,7 @@ export interface LiveTrack {
   mute: boolean
   solo: boolean
   invert: boolean
+  dsp?: LiveChannelSettings
   automation?: Partial<Record<'gain_db' | 'pan' | 'mute', AutomationPoint[]>>
 }
 
@@ -19,6 +23,7 @@ export interface LiveMixConfig {
   count: number
   tracks: LiveTrack[]
   masterDb: number
+  masterDsp?: LiveMasterSettings
 }
 
 export interface LiveState {
@@ -28,6 +33,7 @@ export interface LiveState {
   peaks: Partial<Record<LiveStem | 'master', number>>
   underruns: number
   deviceRate?: number
+  limiterDelayMs?: number
   error?: string
 }
 
@@ -41,6 +47,7 @@ export type MixMessage =
 
 export interface MixStatus extends LiveState {
   generation: number
+  readPosition: number
 }
 
 export type MixEvent = MixStatus | { type: 'block-ready'; generation: number; start: number }

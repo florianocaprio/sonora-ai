@@ -1,5 +1,6 @@
 import type { AutomationPoint, Region } from './api'
 import type { LiveMixConfig, LiveState, MixMessage, MixStatus } from './liveMixTypes'
+import { dbGain, LiveChannelDSP, LivePeakLimiter, liveLimiterTiming } from './liveMixDSP'
 
 // These globals exist in AudioWorkletGlobalScope rather than the window DOM types.
 declare const sampleRate: number
@@ -10,10 +11,6 @@ interface Block {
   start: number
   end: number
   tracks: Float32Array[]
-}
-
-function dbGain(db: number) {
-  return 10 ** (db / 20)
 }
 
 function automationValue(points: AutomationPoint[] | undefined, position: number, fallback: number, fade = 0) {
@@ -45,6 +42,8 @@ function automationValue(points: AutomationPoint[] | undefined, position: number
 class LiveMixProcessor extends AudioWorkletProcessor {
   private generation = 0
   private cursor = 0
+  private audibleCursor = 0
+  private draining = 0
   private phase = 0
   private config: LiveMixConfig = { rate: sampleRate, count: 0, tracks: [], masterDb: 0 }
   private loop: Region | null = null
@@ -57,7 +56,10 @@ class LiveMixProcessor extends AudioWorkletProcessor {
   private volume = 0.8
   private monitorGain = 0.8
   private masterGain = 1
-  private controls: { manualGain: number; gain: number; pan: number; targetGate: number }[] = []
+  private controls: { manualGain: number; gain: number; pan: number; targetGate: number; dsp: LiveChannelDSP }[] = []
+  private master = new LiveChannelDSP(sampleRate)
+  private limiter?: LivePeakLimiter
+  private limiterTiming = 0
   private peaks: number[] = []
   private masterPeak = 0
   private readonly smoothing = 1 - Math.exp(-1 / (0.003 * sampleRate))
@@ -72,19 +74,28 @@ class LiveMixProcessor extends AudioWorkletProcessor {
     this.controls = config.tracks.map((track, index) => {
       const gate = Number(!track.mute && (!solo || track.solo))
       const manualGain = dbGain(track.gainDb) * (track.invert ? -1 : 1)
+      const existing = reset ? undefined : this.controls[index]?.dsp
+      const dsp = existing ?? new LiveChannelDSP(sampleRate, track.dsp)
+      existing?.configure(track.dsp)
       return {
-        manualGain,
+        dsp, manualGain,
         gain: reset ? gate * manualGain : this.controls[index]?.gain ?? gate * manualGain,
         pan: reset ? track.pan : this.controls[index]?.pan ?? track.pan,
         targetGate: gate,
       }
     })
+    const timing = liveLimiterTiming(config.masterDsp)
+    if (reset || timing !== this.limiterTiming) {
+      this.limiter = timing ? new LivePeakLimiter(sampleRate, timing, config.masterDsp) : undefined
+      this.limiterTiming = timing
+    } else this.limiter?.configure(config.masterDsp)
     if (reset) {
+      this.master = new LiveChannelDSP(sampleRate, config.masterDsp)
       this.peaks = config.tracks.map(() => 0)
       this.masterPeak = 0
       this.masterGain = dbGain(config.masterDb)
       this.monitorGain = this.volume
-    }
+    } else this.master.configure(config.masterDsp)
     this.config = config
   }
 
@@ -92,6 +103,8 @@ class LiveMixProcessor extends AudioWorkletProcessor {
     if (message.type === 'reset') {
       this.generation = message.generation
       this.cursor = message.position
+      this.audibleCursor = message.position
+      this.draining = 0
       this.phase = 0
       this.loop = message.loop
       this.playing = message.playing
@@ -148,12 +161,29 @@ class LiveMixProcessor extends AudioWorkletProcessor {
     const peaks: LiveState['peaks'] = { master: this.masterPeak }
     this.config.tracks.forEach((track, index) => { peaks[track.stem] = this.peaks[index] })
     const message: MixStatus = {
-      generation: this.generation, position: this.cursor, playing: this.playing,
+      generation: this.generation, position: this.audibleCursor, readPosition: this.cursor, playing: this.playing,
       buffering: this.buffering, peaks, underruns: this.underruns, deviceRate: sampleRate,
+      limiterDelayMs: (this.limiter?.delay ?? 0) * 1000 / sampleRate,
     }
     this.port.postMessage(message)
     this.masterPeak = 0
     this.peaks.fill(0)
+  }
+
+  private writeFrame(left: Float32Array, right: Float32Array, frame: number,
+                     l: number, r: number, position: number) {
+    if (this.limiter) {
+      if (!this.limiter.process(l, r, position)) return
+      l = this.limiter.left
+      r = this.limiter.right
+      position = this.limiter.position
+    }
+    // The meter measures the limited mix, before the monitor volume.
+    this.masterPeak = Math.max(this.masterPeak, Math.abs(l), Math.abs(r))
+    this.monitorGain += (this.volume - this.monitorGain) * this.smoothing
+    left[frame] = l * this.monitorGain
+    right[frame] = r * this.monitorGain
+    this.audibleCursor = position
   }
 
   process(_inputs: Float32Array[][], outputs: Float32Array[][]) {
@@ -170,6 +200,12 @@ class LiveMixProcessor extends AudioWorkletProcessor {
         if (this.loop && length > 0) this.cursor = start + (this.cursor - end) % length
         else {
           this.cursor = count
+          if (this.draining < (this.limiter?.delay ?? 0)) {
+            this.writeFrame(left, right, frame, 0, 0, count)
+            this.draining += 1
+            continue
+          }
+          this.audibleCursor = count
           this.playing = false
           this.reportIn = 0
           break
@@ -208,15 +244,20 @@ class LiveMixProcessor extends AudioWorkletProcessor {
         const a = block.tracks[index]
         const b = next.tracks[index]
         let l = a[offset * track.channels]
-        l = (l + (b[nextOffset * track.channels] - l) * fraction) * control.gain
-        let r: number
+        l += (b[nextOffset * track.channels] - l) * fraction
+        let r = l
+        if (track.channels === 2) {
+          r = a[offset * 2 + 1]
+          r += (b[nextOffset * 2 + 1] - r) * fraction
+        }
+        control.dsp.process(l, r)
+        l = control.dsp.left * control.gain
+        r = control.dsp.right * control.gain
         if (track.channels === 1) {
           const angle = (control.pan + 1) * Math.PI / 4
-          r = l * Math.sin(angle)
+          r *= Math.sin(angle)
           l *= Math.cos(angle)
         } else {
-          r = a[offset * 2 + 1]
-          r = (r + (b[nextOffset * 2 + 1] - r) * fraction) * control.gain
           l *= 1 - Math.max(0, control.pan)
           r *= 1 + Math.min(0, control.pan)
         }
@@ -225,16 +266,12 @@ class LiveMixProcessor extends AudioWorkletProcessor {
         mixedRight += r
       }
       this.masterGain += (targetMaster - this.masterGain) * this.smoothing
-      this.monitorGain += (this.volume - this.monitorGain) * this.smoothing
-      const l = mixedLeft * this.masterGain
-      const r = mixedRight * this.masterGain
-      this.masterPeak = Math.max(this.masterPeak, Math.abs(l), Math.abs(r))
-      left[frame] = l * this.monitorGain
-      right[frame] = r * this.monitorGain
-
+      this.master.process(mixedLeft, mixedRight)
       this.phase += rate
       this.cursor += Math.floor(this.phase / sampleRate)
       this.phase %= sampleRate
+      const outputPosition = this.loop && this.cursor >= end ? start + (this.cursor - end) % length : Math.min(count, this.cursor)
+      this.writeFrame(left, right, frame, this.master.left * this.masterGain, this.master.right * this.masterGain, outputPosition)
     }
     this.reportIn -= left.length
     if (this.generation > 0 && this.reportIn <= 0) {

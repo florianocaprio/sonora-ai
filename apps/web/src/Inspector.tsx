@@ -10,7 +10,7 @@ const operationNames: Record<OperationType, string> = {
   declick: 'Riparazione click',
   peq: 'Equalizzatore parametrico',
   microgap: 'Interpolazione micro-gap',
-  inpaint: 'Inpainting neurale · Pianoforte',
+  inpaint: 'Inpainting neurale',
 }
 
 const profiles: Record<Profile, string> = { basic: 'Basic', medium: 'Medium', high: 'High' }
@@ -220,14 +220,17 @@ export function Inspector({ asset, versions, inpaintModel, analysis, selectedEve
   const sampleRate = asset?.metadata.sample_rate ?? 0
   const sampleCount = asset?.metadata.sample_count ?? 0
 
-  const inpaintReady = ['installed', 'verified'].includes(inpaintModel?.status ?? '')
-  const inpaintAllowed = profile === 'high' && asset?.stem === 'music' && inpaintReady
+  const inpaintReady = ['installed', 'verified', 'ready'].includes(inpaintModel?.status ?? '')
+  const inpaintAllowed = profile === 'high' && inpaintReady
+  const minGap = inpaintModel?.min_gap_ms ?? 20
+  const maxGap = inpaintModel?.max_gap_ms ?? 250
+  const sideContext = inpaintModel?.min_context_ms_per_side ?? 250
   const inpaintAdded = operations.some(op => op.type === 'inpaint' && !op.bypass)
 
   function newOperation() {
-    const start = Math.ceil(sampleRate / 4)
+    const start = Math.ceil(sampleRate * sideContext / 1000)
     const target = selection ?? (operationType === 'inpaint'
-      ? { start_sample: start, end_sample: start + Math.ceil(sampleRate / 10) }
+      ? { start_sample: start, end_sample: start + Math.floor(sampleRate * Math.min(100, maxGap) / 1000) }
       : { start_sample: 0, end_sample: sampleCount })
     if (operationType === 'microgap') setProfile('high')
     setOperations([...operations, {
@@ -297,8 +300,8 @@ export function Inspector({ asset, versions, inpaintModel, analysis, selectedEve
   function invalidInpaint(op: Operation) {
     const frames = op.end_sample - op.start_sample
     const seed = op.params.seed ?? 0
-    return !inpaintAllowed || frames * 1000 < sampleRate * 20 || frames * 1000 > sampleRate * 250
-      || Math.min(op.start_sample, sampleCount - op.end_sample) * 4 < sampleRate
+    return !inpaintAllowed || frames * 1000 < sampleRate * minGap || frames * 1000 > sampleRate * maxGap
+      || Math.min(op.start_sample, sampleCount - op.end_sample) * 1000 < sampleRate * sideContext
       || !Number.isInteger(seed) || seed < 0 || seed > 2147483647
   }
 
@@ -346,9 +349,9 @@ export function Inspector({ asset, versions, inpaintModel, analysis, selectedEve
             <div className="profile-selector" aria-label="Profilo di restauro">
               {Object.entries(profiles).map(([value, label]) => <button type="button" key={value} aria-pressed={profile === value} onClick={() => setProfile(value as Profile)}>{label}</button>)}
             </div>
-            <p className="hint">{profile === 'basic' ? 'Interventi conservativi su difetti tecnici.' : profile === 'medium' ? 'Interventi conservativi ed equalizzazione correttiva.' : 'Ricostruzione di micro-gap e anteprima neurale di regioni musicali da approvare.'}</p>
-            {profile === 'high' && asset.stem === 'music' && <p className="hint">
-              {inpaintReady ? 'Modello sperimentale per pianoforte. Regione 20–250 ms, con almeno 250 ms ai lati.'
+            <p className="hint">{profile === 'basic' ? 'Interventi conservativi su difetti tecnici.' : profile === 'medium' ? 'Interventi conservativi ed equalizzazione correttiva.' : 'Ricostruzione di micro-gap e anteprima neurale da ascoltare e approvare.'}</p>
+            {profile === 'high' && inpaintModel && <p className="hint">
+              {inpaintReady ? `${inpaintModel.name}. Regione da ${minGap} a ${maxGap} ms, con almeno ${sideContext} ms ai lati.`
                 : 'Installa il modello di inpainting dalla pagina Modelli.'}
             </p>}
             <button type="button" disabled={busy} onClick={() => void suggestPlan()}>Proponi catena</button>

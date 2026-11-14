@@ -99,6 +99,11 @@ export interface Model {
   weights_license?: string
   sha256?: string
   can_install?: boolean
+  checkpoint_required?: boolean
+  stems?: Stem[]
+  min_gap_ms?: number
+  max_gap_ms?: number
+  min_context_ms_per_side?: number
 }
 
 export interface Health {

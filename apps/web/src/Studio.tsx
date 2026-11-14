@@ -22,7 +22,7 @@ const views: { id: View; label: string }[] = [
 ]
 const jobNames: Record<string, string> = { import: 'Importazione', separate: 'Separazione', analyze: 'Analisi', restore: 'Restauro', mix: 'Mix DSP', export: 'Esportazione', install_model: 'Installazione modello' }
 const jobStatuses: Record<JobStatus, string> = { queued: 'In coda', running: 'In corso', cancelling: 'Annullamento', cancelled: 'Annullato', succeeded: 'Completato', failed: 'Errore', blocked: 'Bloccato' }
-const modelStatuses: Record<string, string> = { available: 'Disponibile', installed: 'Installato', verified: 'Verificato', blocked: 'Bloccato', missing: 'Da installare' }
+const modelStatuses: Record<string, string> = { available: 'Disponibile', ready: 'Pronto', installed: 'Installato', verified: 'Verificato', blocked: 'Bloccato', missing: 'Da installare' }
 const displayDate = new Intl.DateTimeFormat('it-IT', { dateStyle: 'medium', timeStyle: 'short' })
 
 function storedValue(key: string, fallback: string) {
@@ -162,9 +162,9 @@ function ModelCatalog({ models, busy, onInstall, onVerify, selectedId }: {
             </dl>
             {model.stereo_warning && <p className="hint">{model.stereo_warning}</p>}
             <div className="wrap-actions">
-              {model.status !== 'installed' && model.status !== 'verified' &&
-                <button type="button" className="primary" disabled={busy || model.can_install === false || (!model.backends.length && model.status === 'blocked')} onClick={() => onInstall(model)}>Scarica {model.size_bytes ? fileSize(model.size_bytes) : 'checkpoint'}</button>}
-              <button type="button" disabled={busy || !['installed', 'verified'].includes(model.status)} onClick={() => onVerify(model)}>Verifica SHA-256</button>
+              {model.status !== 'installed' && model.status !== 'verified' && model.can_install !== false &&
+                <button type="button" className="primary" disabled={busy || (!model.backends.length && model.status === 'blocked')} onClick={() => onInstall(model)}>Scarica {model.size_bytes ? fileSize(model.size_bytes) : 'checkpoint'}</button>}
+              {model.checkpoint_required !== false && <button type="button" disabled={busy || !['installed', 'verified'].includes(model.status)} onClick={() => onVerify(model)}>Verifica SHA-256</button>}
               {selectedId === model.id && <span className="hint">Selezionato in studio</span>}
             </div>
           </article>
@@ -491,7 +491,8 @@ function ProjectStudio({ project, health, models, selectedModelId, setSelectedMo
           }} />
           <TransportBar transport={transport} sampleCount={count} sampleRate={rate} region={region} baseline={monitorData(baseline)} candidate={monitorData(candidate)} />
         </div>
-        <Inspector key={active?.id ?? 'none'} inpaintModel={models.find(item => item.task === 'inpainting')} asset={active} versions={versions} analysis={relevantAnalysis} selectedEvent={selectedEvent} region={region} busy={!mutable}
+        <Inspector key={active?.id ?? 'none'} inpaintModel={models.find(item => item.task === 'inpainting' && active &&
+          (item.stems?.includes(active.stem) || (!item.stems && active.stem === 'music' && item.id === 'diffusion-inpaint')))} asset={active} versions={versions} analysis={relevantAnalysis} selectedEvent={selectedEvent} region={region} busy={!mutable}
           onAnalyze={async ({ depth, sensitivity, region }: { depth: Depth; sensitivity: number; region?: Region }) => {
             if (active) await onQueue(path + '/analyze', { asset_id: active.id, depth, sensitivity, ...region })
           }}

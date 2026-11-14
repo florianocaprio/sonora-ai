@@ -107,8 +107,8 @@ function Strip({ stem, settings, candidates, sampleCount, sampleRate, renderedMe
             {compressorFields.map(field => <label key={field.key}>{field.label}<input type="number" min={field.min} max={field.max} step={field.step} value={compressor[field.key]} onChange={event => patch({ compressor: { ...compressor, [field.key]: Number(event.target.value) } })} /></label>)}
           </div>}
           {master && <>
-            <label title="Tetto true peak verificato sul render">Ceiling (dBTP)<input type="number" min={-30} max={0} step={0.1} value={settings.ceiling_dbtp ?? -1} onChange={event => patch({ ceiling_dbtp: Number(event.target.value) })} /></label>
-            <label className="inline-check" title="Opera sul master renderizzato"><input type="checkbox" checked={limiter.enabled} onChange={event => patch({ limiter: { ...limiter, enabled: event.target.checked } })} /> Limiter true peak</label>
+            <label title="Tetto true peak del limiter, misurato sul file dopo il render">Ceiling (dBTP)<input type="number" min={-30} max={0} step={0.1} value={settings.ceiling_dbtp ?? -1} onChange={event => patch({ ceiling_dbtp: Number(event.target.value) })} /></label>
+            <label className="inline-check" title="Attiva il limiter sul master live e sul render"><input type="checkbox" checked={limiter.enabled} onChange={event => patch({ limiter: { ...limiter, enabled: event.target.checked } })} /> Limiter true peak</label>
             {limiter.enabled && <div className="panel-flow nested-controls">
               <label>Lookahead (ms)<input type="number" min={1} max={20} step={1} value={limiter.lookahead_ms} onChange={event => patch({ limiter: { ...limiter, lookahead_ms: Number(event.target.value) } })} /></label>
               <label>Rilascio limiter (ms)<input type="number" min={10} max={1000} step={1} value={limiter.release_ms} onChange={event => patch({ limiter: { ...limiter, release_ms: Number(event.target.value) } })} /></label>
@@ -178,7 +178,7 @@ export function Mixer({ assets, analyses, settings, sampleCount, sampleRate, bus
         <Strip stem="master" settings={settings.master} candidates={[]} sampleCount={sampleCount} sampleRate={sampleRate} renderedMetrics={loaded} livePeak={live ? live.peaks.master ?? 0 : undefined} editable={hasSource} onChange={config => onChange({ ...settings, master: config })} />
       </div>
       <div className="mixer-footer">
-        <span className="hint">{showOriginal ? 'La console usa l’originale finché non ci sono stem approvati. ' : 'Il residuo può reintrodurre contaminazioni. '}EQ, compressore e limiter si ascoltano nel master renderizzato.</span>
+        <span className="hint">{showOriginal ? 'La console usa l’originale finché non ci sono stem approvati. ' : 'Il residuo può reintrodurre contaminazioni. '}EQ, compressore e limiter operano anche nel monitor live. Il render verifica il true peak del file.{live?.limiterDelayMs ? ` Lookahead live: ${formatNumber.format(live.limiterDelayMs)} ms.` : ''}</span>
         <div className="button-cluster">
           <button type="button" disabled={!liveAvailable || Boolean(live?.playing)} onClick={onLive}>Ascolta mix live</button>
           <button type="button" disabled={!master} onClick={() => { if (master) onListen(master) }}>Ascolta master</button>

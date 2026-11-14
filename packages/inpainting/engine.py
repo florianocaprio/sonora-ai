@@ -18,7 +18,8 @@ from packages.audio_core.io import (
 )
 from packages.model_adapters.registry import ModelUnavailable, checkpoint_path
 
-from .registry import MODEL_ID, manifest, verify_model
+from .contextual import restore_gap
+from .registry import MODEL_ID, manifest, model_for_stem, model_limits, verify_model
 
 MODEL_RATE = 22050
 CONTEXT_SAMPLES = 32768
@@ -158,7 +159,7 @@ def _fade_in_region(patch: np.ndarray, original_left: np.ndarray, original_right
 
 def inpaint(
     source: Path, destination: Path, start_sample: int, end_sample: int, model_dir: Path, *,
-    seed: int = 0, progress: Progress = None, cancelled: Cancelled = None,
+    stem: str = "music", seed: int = 0, progress: Progress = None, cancelled: Cancelled = None,
 ) -> dict:
     """Render a candidate version with no modifications outside the selected gap."""
     import torch
@@ -172,6 +173,9 @@ def inpaint(
     started = time.monotonic()
     with sf.SoundFile(source) as stream:
         start_sample, end_sample = sample_region(start_sample, end_sample, stream.frames)
+        if stem != "music":
+            return _contextual_patch(stream, destination, start_sample, end_sample, model_dir, stem,
+                                     seed=seed, progress=progress, cancelled=cancelled, started=started)
         observed, first, last, left_anchor, right_anchor = _prepare_region(stream, start_sample, end_sample)
         rate = stream.samplerate
         model_first, model_last = floor(first * MODEL_RATE / rate), ceil(last * MODEL_RATE / rate)
@@ -219,4 +223,40 @@ def inpaint(
         "wall_seconds": time.monotonic() - started,
         "process_peak_rss_bytes": peak_rss if platform.system() == "Darwin" else peak_rss * 1024,
         "stereo_mode": "independent_lr" if signal["channels"] == 2 else "mono",
+    }
+
+
+def _contextual_patch(stream, destination, first, last, model_dir, stem, *, seed, progress, cancelled, started):
+    import torch
+
+    minimum, maximum, min_side = model_limits(stem)
+    rate = validate_rate(stream.samplerate)
+    if not minimum * rate <= (last - first) * 1000 <= maximum * rate:
+        raise ValueError(f"L'inpainting di questo stem richiede un intervallo da {minimum} a {maximum} ms.")
+    if min(first, stream.frames - last) < ceil(min_side * rate / 1000):
+        raise ValueError(f"Servono almeno {min_side} ms di segnale prima e dopo la regione.")
+    if stream.channels not in (1, 2):
+        raise ValueError("L'inpainting supporta file mono e stereo.")
+    verify_model(model_dir, model_for_stem(stem), cancelled=cancelled)
+    previous_threads = torch.get_num_threads()
+    threads = min(previous_threads, 4)
+    torch.set_num_threads(threads)
+    try:
+        inference_started = time.monotonic()
+        patch, left, right, details = restore_gap(stream, first, last, stem, seed=seed,
+                                                    progress=progress, cancelled=cancelled)
+        inference_seconds = time.monotonic() - inference_started
+    finally:
+        torch.set_num_threads(previous_threads)
+    if len(patch) != last - first:
+        raise RuntimeError("La regione generata non coincide con l'intervallo richiesto.")
+    fade = _fade_in_region(patch, left, right, rate)
+    _replace_region(stream, destination, first, patch, cancelled)
+    peak_rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    return {
+        **audio_info(stream), **details,
+        "classification": "generated", "stem": stem, "seed": seed, "backend": "cpu",
+        "cpu_threads": threads, "start_sample": first, "end_sample": last, "fade_samples_per_edge": fade,
+        "inference_seconds": inference_seconds, "wall_seconds": time.monotonic() - started,
+        "process_peak_rss_bytes": peak_rss if platform.system() == "Darwin" else peak_rss * 1024,
     }

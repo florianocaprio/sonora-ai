@@ -186,14 +186,12 @@ class Task:
         generative = any(op["type"] == "inpaint" and not op.get("bypass") for op in operations)
         if asset["status"] != "approved":
             raise ValueError("La sorgente della patch richiede una versione approvata.")
-        if generative and asset["stem"] != "music":
-            raise ValueError("Il modello di inpainting è dedicato allo stem Musica.")
         metadata = restore(source, output, operations, progress=self.progress, cancelled=self.cancelled,
-                           neural=self.neural_patch if generative else None)
+                           neural=(lambda src, dest, op: self.neural_patch(src, dest, op, asset["stem"])) if generative else None)
         identifier = self.add_asset(asset["stem"], "restored", "proposed", asset["id"], output, {
             **inspect_audio(output), **metadata, "profile": self.payload["profile"],
             "requested_operations": operations, "source_sha256": asset["metadata"]["sha256"],
-        }, "Patch generata · Musica" if generative else None)
+        }, f"Patch generata · {NAMES[asset['stem']]}" if generative else None)
         self.phase("Calcolo della differenza")
         delta = self.folder / "difference.wav"
         difference_audio(source, output, delta, cancelled=self.cancelled)
@@ -208,13 +206,13 @@ class Task:
         self.artifacts.append(("analyses", (analysis, self.project, identifier, encode(after), now())))
         return {"asset_id": identifier, "difference_id": difference, "analysis_id": analysis}
 
-    def neural_patch(self, source, destination, operation):
+    def neural_patch(self, source, destination, operation, stem):
         from packages.inpainting import inpaint
 
-        self.phase("Inpainting neurale · Musica")
+        self.phase(f"Inpainting neurale · {NAMES[stem]}")
         with self.inference_lock():
             result = inpaint(source, destination, operation["start_sample"], operation["end_sample"],
-                             self.settings.models, seed=int(operation["params"].get("seed", 0)),
+                             self.settings.models, stem=stem, seed=int(operation["params"].get("seed", 0)),
                              progress=self.progress, cancelled=self.cancelled)
         self.phase("Elaborazione del piano di restauro")
         return result

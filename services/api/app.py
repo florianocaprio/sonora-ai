@@ -248,9 +248,9 @@ def create_app(settings: Settings | None = None):
     def separate(project_id: str, body: Separate, idempotency_key: Annotated[str | None, Header(max_length=160)] = None):
         if asset_and_region(project_id, body)["kind"] != "original":
             raise ValueError("Seleziona una versione Originale da separare.")
-        from packages.inpainting import MODEL_ID
+        from services.model_catalog import is_restoration_model
 
-        if body.model_id == MODEL_ID:
+        if is_restoration_model(body.model_id):
             raise ValueError("Questo modello è dedicato all’inpainting nel profilo High.")
         return store().enqueue(project_id, "separate", body.model_dump(), idempotency_key)
 
@@ -268,17 +268,18 @@ def create_app(settings: Settings | None = None):
             raise ValueError("Il piano supera la durata dell'asset.")
         active_inpaint = next((op for op in body.operations if op.type == "inpaint" and not op.bypass), None)
         if active_inpaint:
-            from packages.inpainting import MAX_GAP_MS, MIN_GAP_MS, MIN_SIDE_MS
+            from packages.inpainting import model_for_stem, model_limits
 
             rate = asset["metadata"]["sample_rate"]
             frames = active_inpaint.end_sample - active_inpaint.start_sample
-            if asset["stem"] != "music":
-                raise ValueError("Il modello neurale attuale è dedicato a regioni di pianoforte nello stem Musica.")
-            if not MIN_GAP_MS * rate <= 1000 * frames <= MAX_GAP_MS * rate:
-                raise ValueError(f"Seleziona una regione da {MIN_GAP_MS} a {MAX_GAP_MS} ms per l’inpainting.")
+            if not model_for_stem(asset["stem"]):
+                raise ValueError("Usa un singolo stem Dialoghi, Musica o Effetti per l’inpainting.")
+            minimum, maximum, side = model_limits(asset["stem"])
+            if not minimum * rate <= 1000 * frames <= maximum * rate:
+                raise ValueError(f"Seleziona una regione da {minimum} a {maximum} ms per questo stem.")
             context = min(active_inpaint.start_sample, asset["metadata"]["sample_count"] - active_inpaint.end_sample)
-            if context * 1000 < MIN_SIDE_MS * rate:
-                raise ValueError(f"Lascia almeno {MIN_SIDE_MS} ms di contesto ai due lati della regione.")
+            if context * 1000 < side * rate:
+                raise ValueError(f"Lascia almeno {side} ms di contesto ai due lati della regione.")
         return store().enqueue(project_id, "restore", body.model_dump(), idempotency_key)
 
     @router.post("/projects/{project_id}/mix", status_code=202)

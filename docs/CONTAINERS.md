@@ -39,7 +39,7 @@ docker compose down
 
 ## Inpainting e monitor
 
-L'immagine include il motore per l'[inpainting High](INPAINTING.md), il [limiter del master](LIMITER.md) e il bundle AudioWorklet per il [mix live](LIVE_MIX.md). L'inpainting usa il checkpoint per pianoforte dalla cache `models`. L'installazione iniziale pesa circa 713 MB.
+L'immagine include il motore per l'[inpainting High](INPAINTING.md), il [limiter del master](LIMITER.md) e il bundle AudioWorklet per il [mix live](LIVE_MIX.md). Dialoghi ed Effetti usano inpainting contestuale, disponibile senza download. Musica usa il checkpoint per pianoforte dalla cache `models`, circa 713 MB.
 
 ```sh
 docker compose up --build -d --wait
@@ -47,4 +47,4 @@ docker compose exec worker python -m services.cli models install diffusion-inpai
 docker compose exec worker python -m services.cli models verify diffusion-inpaint
 ```
 
-Il monitor live usa Web Audio in Chromium da localhost. Il limiter agisce durante il render del master.
+Il monitor live usa Web Audio in Chromium da localhost. Il monitor live include EQ, compressore e limiter. Il renderer effettua la verifica true peak sul file.

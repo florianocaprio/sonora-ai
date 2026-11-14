@@ -2,15 +2,12 @@ import { useEffect, useRef, useState } from 'react'
 import * as studioApi from './api'
 import type { AudioAsset, MixerSettings, Region } from './api'
 import type { LiveMixConfig, LiveState, LiveStem, LiveTrack, MixEvent, MixMessage } from './liveMixTypes'
+import { bounded, liveChannelSettings, liveLimiterTiming } from './liveMixDSP'
 import liveProcessorURL from './liveMixProcessor?worker&url'
 
 const liveStems: LiveStem[] = ['original', 'dialogue', 'music', 'effects', 'residual']
 const emptyState: LiveState = { position: 0, playing: false, buffering: false, peaks: {}, underruns: 0 }
 const littleEndian = new Uint8Array(new Uint32Array([1]).buffer)[0] === 1
-
-function finite(value: number | undefined, min: number, max: number) {
-  return typeof value === 'number' && Number.isFinite(value) ? Math.min(max, Math.max(min, value)) : 0
-}
 
 export function liveMixConfig(assets: AudioAsset[], settings: MixerSettings, rate: number, count: number): LiveMixConfig {
   const tracks = liveStems.flatMap<LiveTrack>(stem => {
@@ -21,22 +18,35 @@ export function liveMixConfig(assets: AudioAsset[], settings: MixerSettings, rat
     const channels = source.metadata.channels
     if (channels !== 1 && channels !== 2) return []
     const automation = track.automation && {
-      gain_db: track.automation.gain_db?.map(point => ({ ...point, value: finite(Number(point.value) + (track.trim_db ?? 0), -170, 48) })),
+      gain_db: track.automation.gain_db?.map(point => ({ ...point, value: bounded(Number(point.value), -120, 36) })),
       pan: track.automation.pan,
       mute: track.automation.mute,
     }
     return [{
       stem, assetId: source.id, channels,
-      gainDb: finite(track.gain_db, -90, 24) + finite(track.trim_db, -80, 24),
-      pan: finite(track.pan, -1, 1), mute: track.mute ?? stem === 'residual', solo: Boolean(track.solo),
-      invert: Boolean(track.polarity), automation,
+      gainDb: bounded(track.gain_db, -90, 24),
+      pan: bounded(track.pan, -1, 1), mute: track.mute ?? stem === 'residual', solo: Boolean(track.solo),
+      invert: Boolean(track.polarity), automation, dsp: liveChannelSettings(track, rate),
     }]
   })
-  return { rate, count, tracks, masterDb: finite(settings.master.gain_db, -90, 24) + finite(settings.master.trim_db, -80, 24) }
+  const master = settings.master
+  const limiter = master.limiter?.enabled === true ? {
+    enabled: true,
+    lookahead_ms: bounded(master.limiter.lookahead_ms, 1, 20, 5),
+    release_ms: bounded(master.limiter.release_ms, 10, 1000, 80),
+  } : undefined
+  return {
+    rate, count, tracks, masterDb: bounded(master.gain_db, -90, 24),
+    masterDsp: {
+      ...liveChannelSettings(master, rate),
+      ceiling_dbtp: bounded(master.ceiling_dbtp, -30, 0, -1),
+      limiter,
+    },
+  }
 }
 
 function streamKey(config: LiveMixConfig) {
-  return JSON.stringify([config.rate, config.count, config.tracks.map(track => [track.stem, track.assetId, track.channels])])
+  return JSON.stringify([config.rate, config.count, liveLimiterTiming(config.masterDsp), config.tracks.map(track => [track.stem, track.assetId, track.channels])])
 }
 
 function shortError(error: unknown) {
@@ -49,6 +59,7 @@ class LiveMixer {
   private setup?: Promise<void>
   private generation = 0
   private position = 0
+  private readPosition = 0
   private playing = false
   private closed = false
   private started = false
@@ -89,6 +100,7 @@ class LiveMixer {
       if (data.generation !== this.generation || this.closed || !this.started) return
       if (data.playing && !this.playing) return
       this.position = data.position
+      this.readPosition = data.readPosition
       this.underruns = data.underruns
       const contextPaused = this.playing && context.state !== 'running'
       if (!data.playing && data.position >= this.config.count) {
@@ -124,6 +136,7 @@ class LiveMixer {
 
   private reset() {
     this.generation += 1
+    this.readPosition = this.position
     this.clearBlocks()
     this.publish({ ...emptyState, position: this.position, underruns: this.underruns, playing: this.playing, buffering: this.playing, deviceRate: this.context?.sampleRate })
     this.post({
@@ -165,7 +178,7 @@ class LiveMixer {
     const start = this.loop?.start_sample ?? 0
     const end = this.loop?.end_sample ?? count
     const floor = (sample: number) => Math.floor(sample / blockSize) * blockSize
-    const first = this.position >= end && this.loop ? start : this.position
+    const first = this.readPosition >= end && this.loop ? start : this.readPosition
     const desired: number[] = []
     for (let next = floor(first); next < end && desired.length < 3; next += blockSize) desired.push(next)
     const last = desired.at(-1)
@@ -216,7 +229,13 @@ class LiveMixer {
 
   setLoop(loop: Region | null) {
     const valid = loop && loop.start_sample >= 0 && loop.end_sample <= this.config.count && loop.start_sample < loop.end_sample
-    this.loop = valid ? loop : null
+    const nextLoop = valid ? loop : null
+    const changed = nextLoop?.start_sample !== this.loop?.start_sample || nextLoop?.end_sample !== this.loop?.end_sample
+    this.loop = nextLoop
+    if (changed && this.started && liveLimiterTiming(this.config.masterDsp)) {
+      this.seek(this.position)
+      return
+    }
     this.post({ type: 'loop', loop: this.loop })
     if (this.playing && this.loop && (this.position < this.loop.start_sample || this.position >= this.loop.end_sample)) {
       this.seek(this.loop.start_sample)
