@@ -2,6 +2,8 @@
 
 Intelligent Audio Restoration Studio · Studio locale per la separazione, il restauro e il mix di audio cinematografico su Apple Silicon.
 
+Per una prima prova, segui il [manuale rapido di SONORA AI](docs/MANUALE.md).
+
 ## Avvio su macOS
 
 Servono Python 3.11 ARM64, Node 22.12 o successivo e pnpm 10.34.5. L'installazione crea una venv e scarica dipendenze Python e JavaScript bloccate. Nessun account è necessario per lo studio.
