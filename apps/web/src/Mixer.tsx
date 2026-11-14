@@ -79,7 +79,6 @@ function Strip({ stem, settings, candidates, sampleCount, sampleRate, renderedMe
   return (
     <article className={`channel-strip track-${stem}${master ? ' master-strip' : ''}`}>
       <h3><i className="track-marker" aria-hidden="true" />{stemNames[stem]}</h3>
-      {!master && <label className="channel-source"><span className="sr-only">Sorgente {stemNames[stem]}</span><select value={settings.asset_id ?? ''} disabled={!editable} onChange={event => patch({ asset_id: event.target.value || undefined })}><option value="">Nessuna</option>{candidates.map(item => <option key={item.id} value={item.id}>{item.kind === 'restored' ? 'Restaurata' : item.kind === 'original' ? 'Originale' : 'Separata'} · {item.name}</option>)}</select></label>}
       <div className="fader-section">
         <div className="fader-marks" aria-hidden="true"><span>+24</span><span>0</span><span>−30</span><span>−60</span><span>−80</span></div>
         <input className="fader" type="range" min={-80} max={24} step={0.1} disabled={!editable} value={fader} aria-label={`Fader ${stemNames[stem]} (dB)`} onChange={event => patch({ gain_db: Number(event.target.value) })} />
@@ -122,24 +121,23 @@ function Strip({ stem, settings, candidates, sampleCount, sampleRate, renderedMe
 }
 
 export function initialMixer(assets: AudioAsset[], saved: MixerSettings | null): MixerSettings {
-  const tracks: MixerSettings['tracks'] = { ...saved?.tracks }
   const separated = channels.slice(0, 3).some(stem => preferredAsset(assets, stem))
-  if (separated) {
-    delete tracks.original
-  } else if (!tracks.original || (tracks.original.asset_id && !assets.some(asset => asset.id === tracks.original?.asset_id))) {
-    tracks.original = { gain_db: 0, asset_id: preferredAsset(assets, 'original')?.id }
-  }
-  for (const stem of channels) {
-    const savedTrack = saved?.tracks?.[stem]
+  const tracks: MixerSettings['tracks'] = {}
+  const savedSources = separated && saved?.tracks.original?.asset_id ? null : saved
+  const visibleChannels: LiveStem[] = separated ? [...channels] : ['original', ...channels]
+  for (const stem of visibleChannels) {
+    const savedTrack = savedSources?.tracks[stem]
     const latest = preferredAsset(assets, stem)
-    const sourceIsValid = savedTrack?.asset_id && assets.some(asset => asset.id === savedTrack.asset_id && asset.status === 'approved' && asset.kind !== 'preview')
-    tracks[stem] = { gain_db: 0, pan: 0, mute: stem === 'residual', ...savedTrack, asset_id: sourceIsValid ? savedTrack.asset_id : latest?.id }
+    const sourceIsValid = assets.some(asset => asset.stem === stem && asset.id === savedTrack?.asset_id)
+    const assetId = savedSources ? (sourceIsValid ? savedTrack?.asset_id : undefined) : latest?.id
+    tracks[stem] = { gain_db: 0, pan: 0, mute: stem === 'residual', ...savedTrack, asset_id: assetId }
   }
   return { tracks, master: saved?.master ?? { gain_db: 0, ceiling_dbtp: -1 } }
 }
 
-export function Mixer({ assets, analyses, settings, sampleCount, sampleRate, busy, master, live, liveAvailable, onLive, onChange, onRender, onListen }: {
+export function Mixer({ assets, versionLabels, analyses, settings, sampleCount, sampleRate, busy, master, live, liveAvailable, onLive, onChange, onRender, onListen }: {
   assets: AudioAsset[]
+  versionLabels: Map<string, string>
   analyses: Analysis[]
   settings: MixerSettings
   sampleCount: number
@@ -159,21 +157,32 @@ export function Mixer({ assets, analyses, settings, sampleCount, sampleRate, bus
   const loaded = audioMetrics(master)
   const size = master?.metadata.size_bytes
   const masterMetrics: Record<string, Metric> = { ...loaded }
-  const originals = assets.filter(asset => asset.stem === 'original' && asset.status === 'approved' && asset.kind !== 'preview')
-  const showOriginal = Boolean(settings.tracks.original?.asset_id) || !channels.slice(0, 3).some(stem => assets.some(asset => asset.stem === stem && asset.status === 'approved' && asset.kind !== 'preview'))
+  const showOriginal = Boolean(settings.tracks.original)
   const visibleChannels: LiveStem[] = showOriginal ? ['original', ...channels] : [...channels]
   return (
     <section className="panel mixer" aria-labelledby="mixer-title">
-      <header className="panel-heading"><h2 id="mixer-title">Console DSP</h2><button className="primary" type="button" disabled={busy || !hasSource} title={hasSource ? 'Calcola il master per l’ascolto e l’export' : 'Seleziona e attiva almeno una sorgente approvata'} onClick={onRender}>Render mix</button></header>
+      <header className="panel-heading"><h2 id="mixer-title">Console DSP</h2><button className="primary" type="button" disabled={busy || !hasSource} title={hasSource ? 'Ricompone le versioni selezionate e crea il master' : 'Seleziona e attiva almeno una sorgente approvata'} onClick={onRender}>Remix</button></header>
+      <div className="mixer-sources" role="group" aria-label="Versioni per il remix">
+        {visibleChannels.filter(stem => stem !== 'residual' || assets.some(asset => asset.stem === stem)).map(stem => {
+          const candidates = assets.filter(asset => asset.stem === stem).reverse()
+          return <label className={`channel-source track-${stem}`} key={stem}><span>Sorgente {stemNames[stem]}</span>
+            <select value={settings.tracks[stem]?.asset_id ?? ''} disabled={busy || !candidates.length} onChange={event =>
+              onChange({ ...settings, tracks: { ...settings.tracks, [stem]: { ...settings.tracks[stem], asset_id: event.target.value || undefined } } })}>
+              <option value="">{candidates.length ? 'Escludi dal remix' : 'Nessuna versione approvata'}</option>
+              {candidates.map(asset => <option key={asset.id} value={asset.id}>{versionLabels.get(asset.id) ?? (asset.kind === 'original' ? asset.name : 'Traccia separata')}{!versionLabels.has(asset.id) && candidates.filter(item => item.kind === asset.kind).length > 1 ? ` · ${new Date(asset.created_at).toLocaleString('it-IT')}` : ''}</option>)}
+            </select>
+          </label>
+        })}
+      </div>
       <div className={`mixer-banks${showOriginal ? ' has-original' : ''}`}>
         {visibleChannels.map(stem => {
-          const approved = stem === 'original' ? originals : assets.filter(asset => asset.stem === stem && asset.status === 'approved' && asset.kind !== 'preview')
+          const approved = assets.filter(asset => asset.stem === stem)
           const candidates = approved.map(asset => {
             const analysis = analyses.find(item => item.asset_id === asset.id)
             return analysis ? { ...asset, metadata: { ...asset.metadata, metrics: analysis.metrics } } : asset
           })
           const selected = candidates.find(item => item.id === settings.tracks[stem]?.asset_id)
-          return <Strip key={stem} stem={stem} candidates={candidates} sampleCount={selected?.metadata.sample_count ?? sampleCount} sampleRate={selected?.metadata.sample_rate ?? sampleRate} renderedMetrics={master?.metadata.tracks?.[stem]} livePeak={live ? live.peaks[stem] ?? 0 : undefined} settings={settings.tracks[stem] ?? {}} editable={candidates.length > 0} onChange={track => onChange({ ...settings, tracks: { ...settings.tracks, [stem]: track } })} />
+          return <Strip key={stem} stem={stem} candidates={candidates} sampleCount={selected?.metadata.sample_count ?? sampleCount} sampleRate={selected?.metadata.sample_rate ?? sampleRate} renderedMetrics={master?.metadata.tracks?.[stem]} livePeak={live ? live.peaks[stem] ?? 0 : undefined} settings={settings.tracks[stem] ?? {}} editable={Boolean(selected)} onChange={track => onChange({ ...settings, tracks: { ...settings.tracks, [stem]: track } })} />
         })}
         <Strip stem="master" settings={settings.master} candidates={[]} sampleCount={sampleCount} sampleRate={sampleRate} renderedMetrics={loaded} livePeak={live ? live.peaks.master ?? 0 : undefined} editable={hasSource} onChange={config => onChange({ ...settings, master: config })} />
       </div>

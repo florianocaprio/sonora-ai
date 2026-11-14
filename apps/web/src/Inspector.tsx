@@ -1,6 +1,6 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { Analysis, AudioAsset, Defect, Depth, Metric, Model, Operation, OperationType, Profile, Region } from './api'
-import { formatNumber, formatTime, stemNames } from './api'
+import { formatNumber, formatTime, restorationProfiles, stemNames } from './api'
 
 type InspectorTab = 'analysis' | 'restoration' | 'versions'
 
@@ -13,7 +13,6 @@ const operationNames: Record<OperationType, string> = {
   inpaint: 'Inpainting neurale',
 }
 
-const profiles: Record<Profile, string> = { basic: 'Basic', medium: 'Medium', high: 'High' }
 const defectStatuses: Record<Defect['status'], string> = {
   unreviewed: 'Da rivedere',
   confirmed: 'Confermato',
@@ -166,6 +165,19 @@ function Operations({ operations, rate, maxSample, onChange }: {
 
 const presetsKey = 'sonora.restoration.presets'
 
+interface RestorationDraft { profile: Profile; chains: Record<Profile, Operation[]> }
+
+function readDraft(key?: string): RestorationDraft {
+  try {
+    const saved = key ? JSON.parse(localStorage.getItem(key) ?? 'null') as RestorationDraft | null : null
+    if (saved && Object.hasOwn(restorationProfiles, saved.profile) &&
+      Array.isArray(saved.chains?.basic) && Array.isArray(saved.chains.medium) && Array.isArray(saved.chains.high)) return saved
+  } catch {
+    // Treat unavailable or unreadable storage as an empty draft.
+  }
+  return { profile: 'basic', chains: { basic: [], medium: [], high: [] } }
+}
+
 interface SavedPlan { name: string; stem: AudioAsset['stem']; profile: Profile; operations: Operation[] }
 function readPresets(): SavedPlan[] {
   try {
@@ -175,9 +187,13 @@ function readPresets(): SavedPlan[] {
   }
 }
 
-export function Inspector({ asset, versions, inpaintModel, analysis, selectedEvent, region, busy, onAnalyze, onDefect, onSaveDefect, onListenDefect, onPlan, onRestore, onSelectAsset, onListen, onVersionStatus }: {
+export function Inspector({ asset, versions, versionLabels, restorationTracks, draftKey, openRestoration, inpaintModel, analysis, selectedEvent, region, busy, onAnalyze, onDefect, onSaveDefect, onListenDefect, onPlan, onRestore, onSelectAsset, onSelectTrack, onListen, onVersionStatus }: {
   asset?: AudioAsset
   versions: AudioAsset[]
+  versionLabels: Map<string, string>
+  restorationTracks: AudioAsset[]
+  draftKey?: string
+  openRestoration: boolean
   inpaintModel?: Model
   analysis?: Analysis
   selectedEvent: Defect | undefined
@@ -190,24 +206,29 @@ export function Inspector({ asset, versions, inpaintModel, analysis, selectedEve
   onPlan: (profile: Profile) => Promise<Operation[] | undefined>
   onRestore: (profile: Profile, operations: Operation[]) => Promise<boolean>
   onSelectAsset: (asset: AudioAsset) => void
+  onSelectTrack: (asset: AudioAsset) => void
   onListen: (asset: AudioAsset) => void
   onVersionStatus: (asset: AudioAsset, status: 'approved' | 'rejected') => Promise<void>
 }) {
-  const [tab, setTab] = useState<InspectorTab>('analysis')
+  const [tab, setTab] = useState<InspectorTab>(openRestoration ? 'restoration' : 'analysis')
   const [depth, setDepth] = useState<Depth>('standard')
   const [sensitivity, setSensitivity] = useState(0.5)
   const [statusFilter, setStatusFilter] = useState<Defect['status'] | ''>('')
   const [typeFilter, setTypeFilter] = useState('')
   const [severityFilter, setSeverityFilter] = useState('')
   const [eventPage, setEventPage] = useState(0)
-  const [profile, setProfile] = useState<Profile>('basic')
-  const [chains, setChains] = useState<Record<Profile, Operation[]>>({ basic: [], medium: [], high: [] })
+  const [draft, setDraft] = useState(() => readDraft(draftKey))
+  const currentDraft = useRef(draft)
+  const planRequest = useRef<AbortController | null>(null)
+  const [draftError, setDraftError] = useState(false)
+  const { profile, chains } = draft
   const operations = chains[profile]
   const [operationType, setOperationType] = useState<OperationType>('dc_remove')
   const [planName, setPlanName] = useState('')
   const [presets, setPresets] = useState(readPresets)
   const [presetError, setPresetError] = useState('')
   const [regional, setRegional] = useState(false)
+  useEffect(() => () => planRequest.current?.abort(), [])
   const allEvents = analysis?.events ?? []
   const visibleEvents = allEvents.filter(event => (!statusFilter || event.status === statusFilter) && (!typeFilter || event.type === typeFilter) && (!severityFilter || String(event.severity) === severityFilter))
   const pageLength = 20
@@ -230,12 +251,25 @@ export function Inspector({ asset, versions, inpaintModel, analysis, selectedEve
   const selectedOperation = (operationType === 'inpaint' && !inpaintAllowed) || (operationType === 'microgap' && profile !== 'high')
     ? 'dc_remove' : operationType
 
+  function saveDraft(next: RestorationDraft) {
+    currentDraft.current = next
+    setDraft(next)
+    if (!draftKey) return
+    try {
+      localStorage.setItem(draftKey, JSON.stringify(next))
+      setDraftError(false)
+    } catch {
+      setDraftError(true)
+    }
+  }
+
   function setOperations(next: Operation[]) {
-    setChains(previous => ({ ...previous, [profile]: next }))
+    const current = currentDraft.current
+    saveDraft({ ...current, chains: { ...current.chains, [profile]: next } })
   }
 
   function appendOperation(targetProfile: Profile, operation: Operation) {
-    setChains(previous => ({ ...previous, [targetProfile]: [...previous[targetProfile], operation] }))
+    saveDraft({ profile: targetProfile, chains: { ...chains, [targetProfile]: [...chains[targetProfile], operation] } })
   }
 
   function newOperation() {
@@ -252,8 +286,11 @@ export function Inspector({ asset, versions, inpaintModel, analysis, selectedEve
   }
 
   async function suggestPlan() {
+    const pending = new AbortController()
+    planRequest.current?.abort()
+    planRequest.current = pending
     const plan = await onPlan(profile)
-    if (plan) {
+    if (plan && !pending.signal.aborted && currentDraft.current.chains[profile] === operations) {
       setOperations(selection ? plan.map(op => ({
         ...op,
         start_sample: Math.max(op.start_sample, selection.start_sample),
@@ -301,7 +338,6 @@ export function Inspector({ asset, versions, inpaintModel, analysis, selectedEve
         wet: typeof proposal === 'object' && proposal ? proposal.wet ?? 1 : 1,
         params: typeof proposal === 'object' && proposal ? { ...defaults, ...proposal.params } : defaults,
       })
-      setProfile(targetProfile)
     }
   }
 
@@ -333,11 +369,20 @@ export function Inspector({ asset, versions, inpaintModel, analysis, selectedEve
     <aside className="panel inspector" aria-label="Inspector">
       <header className="panel-heading"><h2>Inspector</h2>{asset && <span className={`track-chip track-${asset.stem}`}>{stemNames[asset.stem]}</span>}</header>
       <div className="restoration-action panel-flow">
+        {restorationTracks.length > 0 && <div className="profile-selector" role="group" aria-label="Traccia da restaurare">
+          {restorationTracks.map(track => <button key={track.stem} type="button" aria-pressed={asset?.stem === track.stem}
+            aria-label={`Restauro ${stemNames[track.stem]}`} onClick={() => {
+              setTab('restoration')
+              if (asset?.id !== track.id) onSelectTrack(track)
+            }}>{stemNames[track.stem]}</button>)}
+        </div>}
+        {canRestore && <p className="restoration-context">{stemNames[asset.stem]} · {versionLabels.get(asset.id) ?? versionKinds[asset.kind]} · {restorationProfiles[profile]}</p>}
         <button type="button" className="primary" aria-describedby="restoration-status" disabled={busy || !canRestore || (tab === 'restoration' && needsConfiguration)} onClick={() => void startRestoration()}>Avvia restauro</button>
         <p className="hint" id="restoration-status">{!canRestore ? 'Seleziona un originale o uno stem completo e approvato.'
-          : invalidOperations ? `${profiles[profile]} · Verifica la catena in Restauro.`
-          : activeOperations ? `${profiles[profile]} · ${activeOperations} ${activeOperations === 1 ? 'intervento attivo' : 'interventi attivi'}`
-          : `${profiles[profile]} · Aggiungi o proponi una catena in Restauro.`}</p>
+          : invalidOperations ? 'Verifica la catena in Restauro.'
+          : activeOperations ? `${activeOperations} ${activeOperations === 1 ? 'intervento attivo' : 'interventi attivi'}`
+          : 'Aggiungi o proponi una catena in Restauro.'}</p>
+        {draftError && <p className="notice error" role="alert">Salvataggio automatico non riuscito. Verifica le impostazioni del browser.</p>}
       </div>
       <div className="inspector-tabs" aria-label="Pannello inspector">
         <button type="button" aria-pressed={tab === 'analysis'} onClick={() => setTab('analysis')}>Difetti</button>
@@ -373,7 +418,7 @@ export function Inspector({ asset, versions, inpaintModel, analysis, selectedEve
           {tab === 'restoration' && !canRestore && <p className="hint">Seleziona un originale o uno stem completo e approvato per il restauro.</p>}
           {tab === 'restoration' && canRestore && <>
             <div className="profile-selector" aria-label="Profilo di restauro">
-              {Object.entries(profiles).map(([value, label]) => <button type="button" key={value} aria-pressed={profile === value} onClick={() => setProfile(value as Profile)}>{label}</button>)}
+              {(Object.keys(restorationProfiles) as Profile[]).map(value => <button type="button" key={value} aria-pressed={profile === value} onClick={() => saveDraft({ ...draft, profile: value })}>{restorationProfiles[value]}</button>)}
             </div>
             <p className="hint">{profile === 'basic' ? 'Interventi conservativi su difetti tecnici.' : profile === 'medium' ? 'Interventi conservativi ed equalizzazione correttiva.' : 'Ricostruzione di micro-gap e anteprima neurale da ascoltare e approvare.'}</p>
             {profile === 'high' && inpaintModel && <p className="hint">
@@ -404,7 +449,7 @@ export function Inspector({ asset, versions, inpaintModel, analysis, selectedEve
             <ul className="version-list">
               {versions.map(version => (
                 <li key={version.id} className="inset">
-                  <div className="version-meta"><strong>{versionKinds[version.kind] ?? version.kind}</strong><small>{versionStatuses[version.status]}</small></div>
+                  <div className="version-meta"><strong>{versionLabels.get(version.id) ?? versionKinds[version.kind]}</strong><small>{versionStatuses[version.status]}</small></div>
                   <p>{version.name}</p>
                   {Boolean(version.metadata.generated_regions?.length) && <p className="hint">
                     Contiene audio generato. Ascolta la patch prima di approvarla.

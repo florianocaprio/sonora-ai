@@ -2,6 +2,7 @@ export const API = '/api/v1'
 
 export type Stem = 'original' | 'dialogue' | 'music' | 'effects' | 'residual' | 'master' | 'difference'
 export type Profile = 'basic' | 'medium' | 'high'
+export const restorationProfiles: Record<Profile, string> = { basic: 'Basic', medium: 'Medium', high: 'High' }
 export type Depth = 'quick' | 'standard' | 'deep'
 export type OperationType = 'dc_remove' | 'dehum' | 'declick' | 'peq' | 'microgap' | 'inpaint'
 export type Region = { start_sample: number; end_sample: number }
@@ -26,6 +27,7 @@ export interface AudioAsset {
     sample_rate: number
     sample_count: number
     start_sample?: number
+    profile?: Profile
     channels?: number
     codec?: string
     original_filename?: string
@@ -274,6 +276,19 @@ export function audioMetrics(asset?: AudioAsset): Record<string, Metric> | undef
 export function preferredAsset(assets: AudioAsset[], stem: Stem): AudioAsset | undefined {
   const candidates = assets.filter(asset => asset.stem === stem && asset.status === 'approved' && asset.kind !== 'preview')
   return candidates.sort((a, b) => b.created_at.localeCompare(a.created_at))[0]
+}
+
+export function restorationVersionLabels(assets: AudioAsset[]): Map<string, string> {
+  const counts: Partial<Record<Stem, number>> = {}
+  const labels = new Map<string, string>()
+  for (const asset of assets) {
+    if (asset.kind !== 'restored') continue
+    const number = (counts[asset.stem] ?? 0) + 1
+    counts[asset.stem] = number
+    const profile = asset.metadata.profile && restorationProfiles[asset.metadata.profile]
+    labels.set(asset.id, `Restauro ${String(number).padStart(2, '0')}${profile ? ` · ${profile}` : ''}`)
+  }
+  return labels
 }
 
 export function formatTime(samples: number, rate: number): string {
