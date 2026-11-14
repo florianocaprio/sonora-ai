@@ -1,6 +1,6 @@
 # Limiter true peak del master
 
-Il limiter è disponibile durante **Render mix**. Si attiva esplicitamente in `master.limiter.enabled` e usa `master.ceiling_dbtp`, con valore predefinito −1 dBTP quando attivo. Il bypass del master disattiva il limiter insieme ai processori. Il monitor live ha un percorso e una latenza propri. Per ascoltare il risultato del limiter usa il master renderizzato.
+Il limiter è disponibile durante **Remix**. Si attiva esplicitamente in `master.limiter.enabled` e usa `master.ceiling_dbtp`, con valore predefinito −1 dBTP quando attivo. Il bypass del master disattiva il limiter insieme ai processori. Il monitor live ha un percorso e una latenza propri. Per ascoltare il risultato del limiter usa il master renderizzato.
 
 | Campo | Default | Intervallo |
 | --- | --- | --- |

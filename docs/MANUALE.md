@@ -17,8 +17,8 @@ docker compose up --build -d --wait
 
 ## Configura e avvia il restauro
 
-1. Seleziona **Originale** o uno stem completo nella timeline. **Avvia restauro** è in alto nell’**Inspector**, sopra le schede. Se il profilo è ancora vuoto, il pulsante apre **Restauro** per configurarlo.
-2. Scegli **Basic**, **Medium** o **High**. Usa **Proponi catena** oppure scegli un processore e premi **Aggiungi**. Ogni profilo ha una catena indipendente. Per ritrovare una catena dopo un cambio di traccia o un ricaricamento della pagina, salvala in **Preset personali** e ricaricala dal profilo corrispondente.
+1. Nell’**Inspector** scegli **Dialoghi**, **Musica** o **Effetti** per aprire il restauro di quella traccia. Puoi anche selezionare **Originale** nella timeline. Sopra **Avvia restauro** trovi la traccia, la versione sorgente e il profilo attivo.
+2. Scegli **Basic**, **Medium** o **High**. Usa **Proponi catena** oppure scegli un processore e premi **Aggiungi**. Lo studio salva catene e ultimo profilo nel browser per ogni traccia del progetto. Li ritrovi cambiando traccia o ricaricando lo studio nello stesso browser. Usa **Preset personali** quando vuoi riutilizzare una catena su un’altra traccia dello stesso tipo.
 3. Premi **Avvia restauro**. Lo studio esegue gli interventi del profilo attivo dall’alto verso il basso. Usa le frecce per cambiare l’ordine e **Bypass** per saltare un intervento. Al termine, in **Versioni** ascolta il risultato e confrontalo con la sorgente. Premi **Approva** per renderlo selezionabile nella console DSP.
 
 Per riparare una lacuna con **Inpainting neurale**, seleziona **Dialoghi**, **Effetti** o **Musica** nella timeline e delimita la regione. In **Restauro → High** scegli **Inpainting neurale** e premi **Aggiungi**. Puoi ritoccare **Inizio** e **Fine** in campioni. A 48 kHz, 30 ms corrispondono a 1.440 campioni.
@@ -27,8 +27,8 @@ Usa regioni di 20–80 ms per **Dialoghi** e 20–120 ms per **Effetti**. Per **
 
 ## Ascolta il mix ed esporta
 
-1. In **Console DSP** scegli la versione approvata per ogni traccia. Premi **Ascolta mix live** e prova fader, pan, mute e solo. Apri **Processori** su un canale o sul master per regolare EQ e compressore durante l’ascolto.
-2. Nei **Processori** del master attiva **Limiter true peak** e imposta il **Ceiling (dBTP)**. Premi **Render mix**, quindi **Ascolta master**. Il render verifica il true peak sul file. Le misure si trovano in **Misure ultimo master**.
+1. In **Console DSP** usa i menu **Sorgente Dialoghi**, **Sorgente Musica** e **Sorgente Effetti** sopra i fader. Scegli una versione approvata per ciascuna traccia, per esempio **Restauro 01 · Basic** per Dialoghi e **Restauro 02 · High** per Effetti. I numeri identificano le versioni nell’ordine di creazione. Le versioni da approvare sono in **Versioni**. Scegli **Escludi dal remix** per una traccia che vuoi lasciare fuori.
+2. Premi **Remix** per ricomporre le sorgenti selezionate in un master. Puoi usare **Ascolta mix live** per regolare fader, pan, EQ e compressore, e **Limiter true peak** nei **Processori** del master. Dopo il remix, premi **Ascolta master** e controlla il true peak in **Misure ultimo master**.
 3. Nel pannello **Report** scegli WAV float32, WAV PCM 24 bit o FLAC 24 bit e premi **Esporta master e stem**. Scarica il master, le tracce e il report dai link dell’esportazione.
 
 ## Se un comando è disabilitato

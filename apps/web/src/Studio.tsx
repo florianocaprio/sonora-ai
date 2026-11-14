@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { DragEvent, FormEvent } from 'react'
 import {
-  API, assetPath, audioMetrics, fileSize, formatNumber, formatTime, isActive, jobPath, localArtifactUrl, modelPath, preferredAsset, projectPath, request,
+  API, assetPath, audioMetrics, fileSize, formatNumber, formatTime, isActive, jobPath, localArtifactUrl, modelPath, preferredAsset, projectPath, request, restorationVersionLabels,
 } from './api'
 import type {
   AudioAsset, Defect, Depth, ExportRecord, Health, Job, JobStatus, Metric, MixerSettings, Model, Operation, Profile, Project, Region, Stem,
@@ -346,9 +346,10 @@ function ProjectStudio({ project, health, models, selectedModelId, setSelectedMo
   const [region, setRegion] = useState<Region | null>(null)
   const [viewport, setViewport] = useState<Region>(defaultViewport)
   const [eventId, setEventId] = useState<string | null>(null)
+  const [restorationTarget, setRestorationTarget] = useState('')
   const [backend, setBackend] = useState('cpu')
   const [regionalSeparation, setRegionalSeparation] = useState(false)
-  const [draftMixer, setDraftMixer] = useState<MixerSettings>()
+  const [draftMixer, setDraftMixer] = useState<{ sourceId: string; settings: MixerSettings }>()
   const path = projectPath(project.id)
   const mutable = !busy && !project.archived
   const active = project.assets.find(asset => asset.id === activeId) ?? original
@@ -365,7 +366,9 @@ function ProjectStudio({ project, health, models, selectedModelId, setSelectedMo
     asset.metadata.sample_rate === rate && asset.metadata.sample_count === count)
   const relevantAnalysis = project.analyses.find(analysis => analysis.asset_id === active?.id)
   const selectedEvent = relevantAnalysis?.events.find(event => event.id === eventId)
-  const versions = project.assets.filter(asset => asset.stem === active?.stem || asset.stem === 'difference' && project.assets.some(item => item.stem === active?.stem && item.id === asset.parent_id)).reverse()
+  const sourceAssets = useMemo(() => project.assets.filter(asset => rootSource(asset)?.id === source?.id), [project.assets, source])
+  const versionLabels = useMemo(() => restorationVersionLabels(sourceAssets), [sourceAssets])
+  const versions = sourceAssets.filter(asset => asset.stem === active?.stem || asset.stem === 'difference' && sourceAssets.some(item => item.stem === active?.stem && item.id === asset.parent_id)).reverse()
   const candidate = active?.kind === 'restored' ? active : versions.find(asset => asset.kind === 'restored' && asset.parent_id === active?.id && asset.status !== 'rejected')
   const baseline = candidate ? project.assets.find(asset => asset.id === candidate.parent_id) : active
   const relevantDefects = relevantAnalysis?.events.map(event => ({ ...event, start_sample: event.start_sample + (active?.metadata.start_sample ?? 0), end_sample: event.end_sample + (active?.metadata.start_sample ?? 0) })) ?? []
@@ -382,10 +385,19 @@ function ProjectStudio({ project, health, models, selectedModelId, setSelectedMo
     return latest ? [latest] : []
   })
   const mixerAssets = useMemo(
-    () => project.assets.filter(asset => asset.stem === 'master' || !source || rootSource(asset)?.id === source.id),
-    [project.assets, source],
+    () => sourceAssets.filter(asset => asset.status === 'approved' && asset.kind !== 'preview' &&
+      asset.metadata.sample_count === count && asset.metadata.sample_rate === rate &&
+      asset.metadata.channels === source?.metadata.channels && (asset.metadata.start_sample ?? 0) === 0),
+    [sourceAssets, source, count, rate],
   )
-  const selectedMix = useMemo(() => initialMixer(mixerAssets, draftMixer ?? project.mixer), [mixerAssets, draftMixer, project.mixer])
+  const restorationTracks = ['dialogue', 'music', 'effects'].flatMap(stem => {
+    const track = mixerAssets.find(asset => asset.id === active?.id && asset.stem === stem) ??
+      mixerAssets.filter(asset => asset.stem === stem && asset.kind === 'separated').at(-1)
+    return track ? [track] : []
+  })
+  const savedMix = draftMixer?.sourceId === source?.id && draftMixer ? draftMixer.settings :
+    Object.values(project.mixer?.tracks ?? {}).some(track => sourceAssets.some(asset => asset.id === track.asset_id)) ? project.mixer : null
+  const selectedMix = useMemo(() => initialMixer(mixerAssets, savedMix), [mixerAssets, savedMix])
   const monitorConfig = useMemo(() => liveMixConfig(mixerAssets, selectedMix, rate, count), [mixerAssets, selectedMix, rate, count])
   const transport = useTransport(project.id, region, monitorConfig)
   const separationModels = models.filter(item => item.task !== 'inpainting')
@@ -402,6 +414,7 @@ function ProjectStudio({ project, health, models, selectedModelId, setSelectedMo
     setActiveId(asset.id)
     storeValue(`sonora.project.${project.id}.asset`, asset.id)
     setEventId(null)
+    setRestorationTarget('')
   }
 
   function selectDefect(defect: Defect, listen = false) {
@@ -444,8 +457,7 @@ function ProjectStudio({ project, health, models, selectedModelId, setSelectedMo
 
   async function render() {
     const tracks = Object.fromEntries(Object.entries(selectedMix.tracks).filter(([, track]) => track.asset_id))
-    const queued = await onQueue(path + '/mix', { tracks, master: selectedMix.master })
-    if (queued) setDraftMixer(undefined)
+    await onQueue(path + '/mix', { tracks, master: selectedMix.master })
   }
 
   const lastSource = useRef<string | undefined>(undefined)
@@ -491,7 +503,9 @@ function ProjectStudio({ project, health, models, selectedModelId, setSelectedMo
           }} />
           <TransportBar transport={transport} sampleCount={count} sampleRate={rate} region={region} baseline={monitorData(baseline)} candidate={monitorData(candidate)} />
         </div>
-        <Inspector key={active?.id ?? 'none'} inpaintModel={models.find(item => item.task === 'inpainting' && active &&
+        <Inspector key={active?.id ?? 'none'} versionLabels={versionLabels} restorationTracks={restorationTracks}
+          draftKey={active && `sonora.restoration.draft.${project.id}.${source.id}.${active.stem}`}
+          openRestoration={active?.id === restorationTarget} inpaintModel={models.find(item => item.task === 'inpainting' && active &&
           (item.stems?.includes(active.stem) || (!item.stems && active.stem === 'music' && item.id === 'diffusion-inpaint')))} asset={active} versions={versions} analysis={relevantAnalysis} selectedEvent={selectedEvent} region={region} busy={!mutable}
           onAnalyze={async ({ depth, sensitivity, region }: { depth: Depth; sensitivity: number; region?: Region }) => {
             if (active) await onQueue(path + '/analyze', { asset_id: active.id, depth, sensitivity, ...region })
@@ -508,13 +522,14 @@ function ProjectStudio({ project, health, models, selectedModelId, setSelectedMo
           }) : Promise.resolve(undefined)}
           onRestore={async (profile: Profile, operations: Operation[]) => Boolean(active && await onQueue(path + '/restore', { asset_id: active.id, profile, operations }))}
           onSelectAsset={select}
+          onSelectTrack={track => { select(track); setRestorationTarget(track.id) }}
           onListen={asset => transport.select(asset)}
           onVersionStatus={async (asset, status) => {
             await onRequest(async () => { await request(assetPath(project.id, asset.id), { method: 'PATCH', data: { status } }); await onChange() })
           }} />
       </div>}
-      {source && <Mixer assets={mixerAssets} analyses={project.analyses} settings={selectedMix} sampleCount={count} sampleRate={rate} busy={!mutable} master={master} live={transport.liveMode ? transport.liveState : undefined} liveAvailable={monitorConfig.tracks.length > 0}
-        onLive={transport.startLive} onChange={setDraftMixer} onRender={() => void render()} onListen={asset => transport.select(asset)} />}
+      {source && <Mixer assets={mixerAssets} versionLabels={versionLabels} analyses={project.analyses} settings={selectedMix} sampleCount={count} sampleRate={rate} busy={!mutable} master={master} live={transport.liveMode ? transport.liveState : undefined} liveAvailable={monitorConfig.tracks.length > 0}
+        onLive={transport.startLive} onChange={settings => setDraftMixer({ sourceId: source.id, settings })} onRender={() => void render()} onListen={asset => transport.select(asset)} />}
     </>
   )
 }
