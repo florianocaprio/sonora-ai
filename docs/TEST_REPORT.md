@@ -30,8 +30,10 @@ Usa `SONORA_TEST_BACKEND=cpu` per ripetere su CPU. I test reali riportano un sal
 
 Il rilascio live/High/mastering ha superato typecheck e build. La suite standard ha eseguito 47 test, con 44 superati e 3 saltati perché richiedono checkpoint. Il test con checkpoint di inpainting è stato eseguito a parte su macOS e Docker Linux ARM64.
 
-Per il nuovo percorso live/High/mastering vedi il [collaudo integrale di Sintel](FILM_QA.md). Restano da verificare lungometraggi, browser diversi da Chromium, un corpus più ampio e il Mac M5 Max indicato nel brief.
+Per il primo percorso live/High/mastering vedi il [collaudo integrale di Sintel](FILM_QA.md). Restano da verificare browser diversi da Chromium, un corpus più ampio e il Mac M5 Max indicato nel brief.
 
 ## Estensione Dialoghi, Effetti e processori live
 
 La suite standard ha eseguito 50 test, con 47 superati e 3 saltati per checkpoint opzionali. Typecheck e build Vite superati. I tre test dell'inpainting contestuale sono riusciti anche in Docker Linux ARM64 con rete disattivata. I due test Chromium del monitor e dei processori sono riusciti sull'immagine Docker. Il limiter live ha misurato −6,42 dBTP su un transitorio con ceiling −6 dBTP, con interpolazione indipendente 16×. Vedi [metodo e limiti](LIVE_MIX.md).
+
+Con i checkpoint DBS-TIGER DnR e Diffusion inpainting locali, la suite CPU ha eseguito gli stessi 50 test, con 49 superati e un salto previsto per il caso di checkpoint assente. Il caso era riuscito nella suite standard. [Collaudo su Valkaama](FEATURE_FILM_QA.md)

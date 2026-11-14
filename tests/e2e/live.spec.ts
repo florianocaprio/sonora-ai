@@ -49,6 +49,16 @@ const monitorStart = Number(process.env.SONORA_LIVE_TEST_START_SAMPLE ?? 0)
 const farSeek = Number(process.env.SONORA_LIVE_TEST_END_SAMPLE ?? 0)
 
 test('monitor streaming, multitraccia sincrona e ricampionamento', async ({ page }) => {
+  let queuedWaveforms = 0
+  let releaseWaveforms: () => void = () => undefined
+  if (readyProject && farSeek > 0) {
+    const release = new Promise<void>(resolve => { releaseWaveforms = resolve })
+    await page.route('**/waveform?*', async route => {
+      queuedWaveforms += 1
+      await release
+      await route.continue()
+    })
+  }
   await page.goto('/')
   await expect(page.getByRole('heading', { name: 'Progetti', exact: true })).toBeVisible()
   if (readyProject) {
@@ -84,6 +94,12 @@ test('monitor streaming, multitraccia sincrona e ricampionamento', async ({ page
   await live.click()
   await expect(transport.getByRole('status').filter({ hasText: 'Mix live' })).toContainText('Mix live')
   await expect.poll(async () => Number(await position.inputValue())).toBeGreaterThan(monitorStart + 1000)
+  if (readyProject && farSeek > 0) {
+    const peakRequestsDuringStartup = queuedWaveforms
+    releaseWaveforms()
+    // Above one minute even at the highest supported project sample rate.
+    if (samples > 60 * 192_000) expect(peakRequestsDuringStartup).toBe(1)
+  }
   await expect.poll(async () => Number(await master.getAttribute('value'))).toBeGreaterThan(-75)
   expect(await page.locator('audio').evaluate(audio => audio.paused)).toBe(true)
   await expect.poll(() => new Set(pcm.map(url => url.pathname)).size).toBeGreaterThanOrEqual(model || readyProject ? 3 : 1)

@@ -10,7 +10,7 @@
 ## Controlli eseguiti
 
 - Import integrale su Mac e Docker Linux ARM64. Chromium ha aperto l'intera timeline nel container, applicato EQ, compressore e limiter live e riprodotto PCM dopo un seek a 93 min 1,25 s. Sul progetto completo questa prova iniziale usa la traccia originale.
-- Monitor multitraccia in Chromium sui primi 95,995 s già separati, con tre stem reali, limiter in riproduzione, mute/solo, seek e loop.
+- Separazione DBS-TIGER DnR su MPS nativo. Inferenza su 1.861 finestre in 3.753,792 s su Apple M2 Max. Dialoghi, Musica, Effetti e Residuo conservano tutti 268.113.024 frame mono a 48 kHz. Chromium ha riprodotto i tre stem integrali dal container, con limiter live, mute/solo, loop e seek a metà film e a 93 min 1,25 s. La stessa prova su un estratto dei primi 95,995 s ha dato esito positivo.
 - Render ed export PCM24 in Docker sulla traccia originale integrale. Il master conserva 268.113.024 frame mono a 48 kHz e misura **−1,19888 dBTP** con ceiling −1 dBTP.
 - Inpainting offline in Docker su regioni degli stem effettivi prodotti da DBS-TIGER MPS. La regione bersaglio è stata mascherata prima dell'inferenza. I candidati rifiutati restano esclusi. In ogni estratto sono stati verificati **96.000 frame esterni identici**. Il worker ha pubblicato la patch come proposta. L'API ha bloccato mix ed export con approvazione assente o revocata.
 
@@ -18,6 +18,12 @@
 |---|---|---:|---:|---:|
 | Dialoghi | 81,050 s · 30 ms, seed 17 | 0,010002 | 0,013302 | 0,014060 |
 | Effetti | 80,050 s · 45 ms, seed 23 | 0,004152 | 0,004580 | 0,005835 |
+
+Le stesse patch sono state applicate e approvate sugli stem integrali in Docker. Il confronto binario ha verificato che i soli frame diversi sono i 1.440 di Dialoghi e i 2.160 di Effetti nelle rispettive maschere. L’RMSE misurato sui file restaurati integrali è 0,010002 per Dialoghi e 0,004152 per Effetti.
+
+Il mix finale usa i tre stem integrali, le due patch approvate, EQ e compressione su Dialoghi e master e limiter true peak sul master. Il WAV float32 misura **−1,19922 dBTP**, con ceiling −1 dBTP e 3,54 dB di riduzione massima del limiter.
+
+Nel primo test Chromium sulle versioni restaurate, le scansioni simultanee delle forme d’onda hanno ritardato l’avvio del PCM. Le viste superiori a un minuto ora richiedono una forma d’onda alla volta. Due ripetizioni Playwright sul container aggiornato hanno verificato che il monitor avanza mentre una forma d’onda è ancora in attesa, che riceve campioni da almeno tre stem e che il seek vicino ai titoli funziona.
 
 Le misure sulle regioni selezionate descrivono il confronto con il segnale prima del mascheramento. Le prove esplorative hanno evidenziato anche regioni dove il silenzio o l'interpolazione lineare hanno errore minore. La qualità dipende dal contesto e ogni patch richiede ascolto e approvazione. [Dettagli inpainting](INPAINTING.md)
 

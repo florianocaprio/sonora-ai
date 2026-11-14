@@ -62,8 +62,11 @@ function Waveform({ peaks }: { peaks: number[] }) {
   return <canvas ref={canvas} className="wave-canvas" aria-hidden="true" />
 }
 
+let longWaveformQueue = Promise.resolve()
+
 function usePeaks(projectId: string, asset: AudioAsset, viewport: Region) {
   const offset = asset.metadata.start_sample ?? 0
+  const rate = asset.metadata.sample_rate
   const end = Math.min(viewport.end_sample - offset, asset.metadata.sample_count)
   const start = Math.max(0, viewport.start_sample - offset)
   const key = `${projectId}/${asset.id}/${start}/${end}`
@@ -72,13 +75,23 @@ function usePeaks(projectId: string, asset: AudioAsset, viewport: Region) {
     if (start >= end) return
     const controller = new AbortController()
     const bins = Math.max(8, Math.min(512, end - start))
-    request<{ peaks: number[] }>(`${assetPath(projectId, asset.id)}/waveform?bins=${bins}&start_sample=${start}&end_sample=${end}`, { signal: controller.signal })
-      .then(result => setLoaded({ key, peaks: result.peaks }))
-      .catch(error => {
-        if (!controller.signal.aborted) setLoaded({ key, error: error.message })
-      })
+    const path = `${assetPath(projectId, asset.id)}/waveform?bins=${bins}&start_sample=${start}&end_sample=${end}`
+    const load = async (signal?: AbortSignal) => {
+      if (controller.signal.aborted) return
+      try {
+        const result = await request<{ peaks: number[] }>(path, { signal })
+        if (!controller.signal.aborted) setLoaded({ key, peaks: result.peaks })
+      } catch (error) {
+        if (!controller.signal.aborted) setLoaded({ key, error: error instanceof Error ? error.message : String(error) })
+      }
+    }
+    if (end - start > 60 * rate) {
+      // Let an in-flight scan finish before starting another. The synchronous
+      // API scan can outlive a cancelled client request and compete with PCM.
+      longWaveformQueue = longWaveformQueue.then(() => load())
+    } else void load(controller.signal)
     return () => controller.abort()
-  }, [projectId, asset.id, start, end, key])
+  }, [projectId, asset.id, start, end, key, rate])
 
   if (start >= end) return { peaks: [] }
   return loaded?.key === key ? loaded : { peaks: undefined, error: undefined }
