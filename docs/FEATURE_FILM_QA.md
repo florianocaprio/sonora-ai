@@ -10,6 +10,8 @@
 ## Controlli eseguiti
 
 - Import integrale su Mac e Docker Linux ARM64. Chromium ha aperto l'intera timeline nel container, applicato EQ, compressore e limiter live e riprodotto PCM dopo un seek a 93 min 1,25 s. Sul progetto completo questa prova iniziale usa la traccia originale.
+- Monitor multitraccia in Chromium sui primi 95,995 s già separati, con tre stem reali, limiter in riproduzione, mute/solo, seek e loop.
+- Render ed export PCM24 in Docker sulla traccia originale integrale. Il master conserva 268.113.024 frame mono a 48 kHz e misura **−1,19888 dBTP** con ceiling −1 dBTP.
 - Inpainting offline in Docker su regioni degli stem effettivi prodotti da DBS-TIGER MPS. La regione bersaglio è stata mascherata prima dell'inferenza. I candidati rifiutati restano esclusi. In ogni estratto sono stati verificati **96.000 frame esterni identici**. Il worker ha pubblicato la patch come proposta. L'API ha bloccato mix ed export con approvazione assente o revocata.
 
 | Stem | Regione | RMSE candidato | RMSE silenzio | RMSE lineare |
