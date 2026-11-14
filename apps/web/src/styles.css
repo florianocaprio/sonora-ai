@@ -257,12 +257,11 @@ details > .metrics-list { margin-top: 0.55rem; }
 .version-meta { display: flex; justify-content: space-between; gap: 0.35rem; }
 .version-list .inset { display: grid; gap: 0.46rem; font-size: 0.8rem; overflow-wrap: anywhere; }
 
-.mixer-banks { display: grid; grid-template-columns: repeat(5, minmax(104px, 1fr)); gap: 0.1rem; overflow-x: auto; }
+.mixer-banks { display: grid; grid-template-columns: repeat(5, minmax(150px, 1fr)); gap: 0.1rem; overflow-x: auto; }
 .channel-strip { display: grid; align-content: start; gap: 0.53rem; padding: 0.67rem 0.75rem; border-right: 1px solid var(--line); min-width: 0; }
 .channel-strip:last-child { border-right: none; }
 .channel-strip h3 { display: flex; align-items: center; gap: 0.38rem; line-height: 1.2; color: var(--track); }
-.mixer-sources { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(165px, 100%), 1fr)); gap: 0.65rem; padding: 0.68rem 0.85rem; border-bottom: 1px solid var(--line); }
-.channel-source span { color: var(--track); font-weight: 650; }
+.channel-source { min-width: 0; }
 .channel-source select { width: 100%; overflow: hidden; text-overflow: ellipsis; }
 .fader-section { display: flex; align-items: stretch; justify-content: center; gap: 0.49rem; height: 112px; margin-top: 0.12rem; }
 .fader-marks { display: flex; flex-direction: column; justify-content: space-between; flex: none; color: var(--muted); font: 0.56rem var(--mono); text-align: right; }
@@ -278,7 +277,7 @@ details > .metrics-list { margin-top: 0.55rem; }
 .channel-settings > summary { color: var(--muted); }
 .channel-settings fieldset { margin-top: 0.5rem; }
 .channel-settings .inline-check { white-space: normal; overflow-wrap: anywhere; }
-.master-strip .fader-section { margin-top: calc(29px + 0.65rem); }
+.master-strip .fader-section { margin-top: calc(3rem + 0.65rem); }
 .nested-controls { margin-left: 0.38rem; padding-left: 0.43rem; border-left: 1px solid var(--line-strong); }
 .automation-panel { padding-top: 0.6rem; }
 .automation-points { display: grid; list-style: none; gap: 0.25rem; }
@@ -330,13 +329,16 @@ details > .metrics-list { margin-top: 0.55rem; }
   .nav-glyph { display: none; }
   .import-content { grid-template-columns: minmax(0, 1fr) auto; }
   .import-file { grid-column: 1 / -1; }
-  .timeline { --label-width: 96px; }
-  .ruler-ticks span:nth-child(2n) { display: none; }
-  .ruler-ticks span:last-child { display: inline; }
+  .timeline { --label-width: 120px; }
+  .ruler-ticks span:not(:first-child):not(:last-child) { display: none; }
   .transport .monitor-source { margin-left: 0; }
   .mixer-footer { align-items: start; }
 }
-.mixer-banks.has-original { grid-template-columns: repeat(6, minmax(104px, 1fr)); }
+.mixer-banks.has-original { grid-template-columns: repeat(6, minmax(150px, 1fr)); }
+@media (max-width: 960px) {
+  .mixer-banks, .mixer-banks.has-original { grid-template-columns: repeat(auto-fit, minmax(min(150px, 100%), 1fr)); }
+  .master-strip .fader-section { margin-top: 0.12rem; }
+}
 .spectrogram { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 0.35rem 0.55rem; align-items: stretch; margin: 0; background: #14161a; padding: 0.56rem 0.75rem; border-bottom: 1px solid var(--line); }
 .frequency-axis { display: flex; flex-direction: column; justify-content: space-between; font: 0.62rem var(--mono); color: var(--muted); }
 .spectrum-plot { height: 136px; }

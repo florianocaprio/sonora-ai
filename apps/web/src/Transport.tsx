@@ -258,13 +258,14 @@ export function useTransport(projectId: string, region: Region | null, config: L
 
 export type Transport = ReturnType<typeof useTransport>
 
-export function TransportBar({ transport, sampleCount, sampleRate, region, baseline, candidate }: {
+export function TransportBar({ transport, sampleCount, sampleRate, region, baseline, candidate, compareRemix }: {
   transport: Transport
   sampleCount: number
   sampleRate: number
   region: Region | null
   baseline?: Source
   candidate?: Source
+  compareRemix: boolean
 }) {
   const { active, ready, audio, position, playing, waiting, loop, setLoop, volume, setVolume, error, select, seek, toggle, stop, loadedMetadata, liveMode, liveState } = transport
   const [matched, setMatched] = useState(false)
@@ -289,7 +290,7 @@ export function TransportBar({ transport, sampleCount, sampleRate, region, basel
   const canLoop = Boolean(region && (liveMode
     ? ready && region.start_sample >= 0 && region.end_sample <= sampleCount
     : active && region.start_sample >= offset && region.end_sample <= offset + active.metadata.sample_count))
-  const monitorName = liveMode ? 'Mix live' : active ? stemNames[active.stem] : 'Monitor'
+  const monitorName = liveMode ? 'Mix live' : active?.stem === 'master' ? 'Remixed' : active ? stemNames[active.stem] : 'Monitor'
   const liveStatus = liveMode && liveState.deviceRate
     ? `Contesto audio ${liveState.deviceRate} Hz · progetto ${sampleRate} Hz · interruzioni ${liveState.underruns}`
     : undefined
@@ -314,8 +315,8 @@ export function TransportBar({ transport, sampleCount, sampleRate, region, basel
           <span>{monitorName}{waiting ? ' · Buffering…' : ''}</span>
         </div>
         <div className="button-cluster ab-controls" aria-label="Ascolto A/B">
-          <button type="button" disabled={!baseline} aria-pressed={Boolean(baseline && currentIsBaseline)} title={baseline?.asset.name ?? 'Versione sorgente non disponibile'} onClick={() => compare(baseline)}>A</button>
-          <button type="button" disabled={!candidate} aria-pressed={Boolean(candidate && currentIsCandidate)} title={candidate?.asset.name ?? 'Versione restaurata non disponibile'} onClick={() => compare(candidate)}>B</button>
+          <button type="button" disabled={!baseline} aria-pressed={Boolean(baseline && currentIsBaseline)} title={baseline?.asset.name ?? 'Versione sorgente non disponibile'} onClick={() => compare(baseline)}>{compareRemix ? 'A · Originale' : 'A'}</button>
+          <button type="button" disabled={!candidate} aria-pressed={Boolean(candidate && currentIsCandidate)} title={compareRemix ? 'Remixed' : candidate?.asset.name ?? 'Versione restaurata non disponibile'} onClick={() => compare(candidate)}>{compareRemix ? 'B · Remixed' : 'B'}</button>
         </div>
         <label className="match-control" title={matchMethod ? `Abbinamento in ${matchMethod}, applicato al solo monitor` : 'Servono misure confrontabili sulle due versioni'}>
           <input type="checkbox" checked={Boolean(!liveMode && matchMethod && matched)} disabled={liveMode || !matchMethod} onChange={event => setMatched(event.target.checked)} /> Abbina {matchMethod || 'livello'}

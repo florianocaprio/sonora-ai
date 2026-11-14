@@ -4,7 +4,7 @@ Nel progetto, carica l'audio e separalo. Premi **Ascolta mix live** nella consol
 
 Apri **Processori** su una traccia o sul master per impostare l'equalizzatore parametrico e il compressore. Entrambi reagiscono mentre il monitor è in riproduzione. Il limiter agisce sul master e applica lo stesso guadagno a sinistra e destra. **Bypass processori** lascia i controlli di livello e pan operativi.
 
-**Ascolta master** passa alla versione renderizzata alla posizione indicata dal clock del monitor. Il renderer lavora al sample rate di progetto e verifica il true peak del file finito, mentre l'AudioWorklet elabora al sample rate del dispositivo senza una seconda passata. Le differenze di compressione, ricampionamento e limiting possono cambiare la forma d'onda. [Motore audio e automazioni](AUDIO_ENGINE.md) · [Limiter del render](LIMITER.md).
+**Remix** crea la traccia **Remixed** nella timeline. Usa **A · Originale** e **B · Remixed** per ascoltare i due file dalla stessa posizione. Il renderer lavora al sample rate di progetto e verifica il true peak del file finito, mentre l'AudioWorklet elabora al sample rate del dispositivo senza una seconda passata. Le differenze di compressione, ricampionamento e limiting possono cambiare la forma d'onda. [Motore audio e automazioni](AUDIO_ENGINE.md) · [Limiter del render](LIMITER.md).
 
 ## Clock e memoria
 
