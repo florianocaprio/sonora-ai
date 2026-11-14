@@ -38,7 +38,7 @@ test(model ? 'flusso reale con checkpoint' : 'flusso di orchestrazione su fixtur
   await expect(page.getByRole('heading', { name: 'Progetti', exact: true })).toBeVisible()
   await page.getByLabel('Nome progetto').fill(name)
   await page.getByRole('button', { name: 'Crea progetto' }).click()
-  await expect(page.getByRole('button', { name: 'Importa audio' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Importa audio' })).toBeEnabled()
   await page.locator('input[type=file]').setInputFiles({ name: 'fixture.wav', mimeType: 'audio/wav', buffer: fixture() })
   await waitJob(page, 'Importazione')
   await expect(page.getByRole('button', { name: 'Riproduci' })).toBeEnabled()
@@ -122,6 +122,7 @@ test(model ? 'flusso reale con checkpoint' : 'flusso di orchestrazione su fixtur
   const firstVersion = inspector.getByRole('listitem').filter({ hasText: 'Restauro 01 · Medium' })
   await expect(firstVersion).toContainText('Approvata')
 
+  const selectedVersions: Record<string, string> = { dialogue: restored.id }
   if (model) {
     const switchTrack = inspector.getByRole('group', { name: 'Traccia da restaurare' })
     await switchTrack.getByRole('button', { name: 'Restauro Musica' }).click()
@@ -152,13 +153,51 @@ test(model ? 'flusso reale con checkpoint' : 'flusso di orchestrazione su fixtur
     await expect(dialogueSource.getByRole('option', { name: 'Restauro 02 · High' })).toHaveCount(1)
     await dialogueSource.selectOption({ label: 'Restauro 02 · High' })
     await dialogueSource.selectOption({ label: 'Restauro 01 · Medium' })
-    await page.getByLabel('Sorgente Musica').selectOption('')
+    for (const [stem, label] of [['music', 'Musica'], ['effects', 'Effetti']]) {
+      await switchTrack.getByRole('button', { name: `Restauro ${label}` }).click()
+      if (stem === 'effects') {
+        await processor.selectOption('declick')
+        await add.click()
+      }
+      await startRestoration.click()
+      const version = inspector.getByRole('listitem').filter({ hasText: 'Restauro 01 · Basic' })
+      await version.getByRole('button', { name: 'Approva', exact: true }).click()
+      const source = page.locator(`.channel-strip.track-${stem}`).getByLabel(`Sorgente ${label}`)
+      await source.selectOption({ label: 'Restauro 01 · Basic' })
+      selectedVersions[stem] = await source.inputValue()
+    }
     await page.getByLabel('Sorgente Residuo').selectOption('')
-    await expect(page.getByLabel('Sorgente Musica')).toHaveValue('')
   }
 
-  await page.getByRole('button', { name: 'Remix', exact: true }).click()
-  await waitJob(page, 'Mix DSP')
+  const remix = page.getByRole('button', { name: 'Remix', exact: true })
+  const timeline = page.getByRole('region', { name: 'Timeline' })
+  const remixed = timeline.getByRole('button', { name: 'Remixed', exact: true })
+  const transport = page.getByRole('region', { name: 'Trasporto' })
+  const a = transport.getByRole('button', { name: 'A · Originale' })
+  const b = transport.getByRole('button', { name: 'B · Remixed' })
+  const audio = page.locator('audio')
+  await expect(remixed).toHaveCount(0)
+  await remix.click()
+  await waitJob(page, 'Remix')
+  await expect(timeline.locator('.track-title').nth(1)).toHaveText('Remixed')
+  await expect(remixed).toHaveAttribute('aria-pressed', 'true')
+  await expect(b).toHaveAttribute('aria-pressed', 'true')
+  const firstRemix = await audio.getAttribute('src')
+  await timeline.getByRole('button', { name: 'Ascolta Remixed' }).click()
+  await expect.poll(() => audio.evaluate(element => element.currentTime)).toBeGreaterThan(0.03)
+  await transport.getByRole('button', { name: 'Pausa' }).click()
+  const position = transport.getByRole('slider', { name: 'Posizione in campioni' })
+  await position.fill('24000')
+  await a.click()
+  await expect(a).toHaveAttribute('aria-pressed', 'true')
+  await expect(audio).not.toHaveAttribute('src', firstRemix!)
+  await expect.poll(() => audio.evaluate(element => element.currentTime)).toBeCloseTo(0.5, 2)
+  await b.click()
+  await expect(audio).toHaveAttribute('src', firstRemix!)
+  await expect.poll(() => audio.evaluate(element => element.currentTime)).toBeCloseTo(0.5, 2)
+  await remix.click()
+  await expect(audio).not.toHaveAttribute('src', firstRemix!)
+  await expect(remixed).toHaveAttribute('aria-pressed', 'true')
   await page.getByRole('button', { name: 'Report', exact: true }).click()
   await page.getByRole('button', { name: 'Esporta master e stem' }).click()
   await waitJob(page, 'Esportazione')
@@ -170,13 +209,19 @@ test(model ? 'flusso reale con checkpoint' : 'flusso di orchestrazione su fixtur
   expect(report.project_name).toBe(name)
   expect(report.tracks.master.measurement.sample_count).toBe(96_000)
   if (model) {
-    expect(Object.keys(report.tracks).sort()).toEqual(['dialogue', 'effects', 'master'])
-    expect(report.tracks.dialogue.version).toBe(restored.id)
+    expect(Object.keys(report.tracks).sort()).toEqual(['dialogue', 'effects', 'master', 'music'])
+    for (const [stem, id] of Object.entries(selectedVersions)) {
+      expect(report.tracks[stem].version).toBe(id)
+      expect(report.tracks[stem].provenance[0]).toMatchObject({ id, kind: 'restored', status: 'approved' })
+    }
   }
   await page.reload()
   await expect(page.getByText(name, { exact: true }).first()).toBeVisible()
+  await expect(remixed).toHaveAttribute('aria-pressed', 'true')
+  await expect(b).toHaveAttribute('aria-pressed', 'true')
   if (model) {
-    await expect(page.getByLabel('Sorgente Dialoghi')).toHaveValue(restored.id)
-    await expect(page.getByLabel('Sorgente Musica')).toHaveValue('')
+    await expect(page.getByLabel('Sorgente Dialoghi')).toHaveValue(selectedVersions.dialogue)
+    await expect(page.getByLabel('Sorgente Musica')).toHaveValue(selectedVersions.music)
+    await expect(page.getByLabel('Sorgente Effetti')).toHaveValue(selectedVersions.effects)
   }
 })

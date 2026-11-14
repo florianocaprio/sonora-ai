@@ -27,8 +27,8 @@ Usa regioni di 20–80 ms per **Dialoghi** e 20–120 ms per **Effetti**. Per **
 
 ## Ascolta il mix ed esporta
 
-1. In **Console DSP** usa i menu **Sorgente Dialoghi**, **Sorgente Musica** e **Sorgente Effetti** sopra i fader. Scegli una versione approvata per ciascuna traccia, per esempio **Restauro 01 · Basic** per Dialoghi e **Restauro 02 · High** per Effetti. I numeri identificano le versioni nell’ordine di creazione. Le versioni da approvare sono in **Versioni**. Scegli **Escludi dal remix** per una traccia che vuoi lasciare fuori.
-2. Premi **Remix** per ricomporre le sorgenti selezionate in un master. Puoi usare **Ascolta mix live** per regolare fader, pan, EQ e compressore, e **Limiter true peak** nei **Processori** del master. Dopo il remix, premi **Ascolta master** e controlla il true peak in **Misure ultimo master**.
+1. In **Console DSP** apri il menu **Versione** dentro ciascun canale (**Dialoghi**, **Musica**, **Effetti**). Scegli una versione approvata, per esempio **Restauro 01 · Basic**, oppure **Escludi dal remix**. I numeri seguono l’ordine di creazione. Puoi approvare i restauri nella scheda **Versioni** dell’Inspector.
+2. Premi **Remix**. Quando il calcolo finisce, lo Studio torna alla timeline e seleziona la nuova traccia **Remixed** subito sotto **Originale**. Premi il pulsante di ascolto accanto a **Remixed** per riprodurla. Nel trasporto usa **A · Originale** e **B · Remixed** per cambiare traccia mantenendo la stessa posizione. Dalla console puoi tornare al confronto con **Vai a Remixed**.
 3. Nel pannello **Report** scegli WAV float32, WAV PCM 24 bit o FLAC 24 bit e premi **Esporta master e stem**. Scarica il master, le tracce e il report dai link dell’esportazione.
 
 ## Se un comando è disabilitato

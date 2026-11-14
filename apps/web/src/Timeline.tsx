@@ -164,16 +164,17 @@ function Track({
   const visibleStart = Math.max(offset, viewport.start_sample)
   const visibleEnd = Math.min(offset + asset.metadata.sample_count, viewport.end_sample)
   const span = viewport.end_sample - viewport.start_sample
+  const label = asset.stem === 'master' ? 'Remixed' : stemNames[asset.stem]
 
   return (
     <div className={`timeline-track track-${asset.stem}${selected ? ' selected' : ''}`}>
       <div className="track-label">
-        <button type="button" className="track-title" aria-pressed={selected} onClick={onSelect} title={asset.name}>
+        <button type="button" className="track-title" aria-pressed={selected} onClick={onSelect} title={asset.stem === 'master' ? label : asset.name}>
           <i className="track-marker" aria-hidden="true" />
-          <span>{stemNames[asset.stem]}</span>
+          <span>{label}</span>
           {asset.status === 'proposed' && <small>Bozza</small>}
         </button>
-        <button type="button" className="track-audition" aria-pressed={monitoring} aria-label={`Ascolta ${stemNames[asset.stem].toLowerCase()}`} title="Invia al monitor" onClick={onListen}>◖))</button>
+        <button type="button" className="track-audition" aria-pressed={monitoring} aria-label={asset.stem === 'master' ? 'Ascolta Remixed' : `Ascolta ${label.toLowerCase()}`} title={asset.stem === 'master' ? 'Ascolta Remixed' : 'Invia al monitor'} onClick={onListen}>◖))</button>
       </div>
       <div className="wave-area" onPointerDown={startDrag} onPointerMove={moveDrag} onPointerUp={finishDrag} onPointerCancel={() => { drag.current = null }}>
         {peaks ? visibleStart < visibleEnd && <div className="wave-segment" style={{ left: `${(visibleStart - viewport.start_sample) * 100 / span}%`, width: `${(visibleEnd - visibleStart) * 100 / span}%` }}><Waveform peaks={peaks} /></div> : <span className="wave-message">{error || 'Calcolo forma d’onda…'}</span>}

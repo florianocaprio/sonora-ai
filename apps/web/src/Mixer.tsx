@@ -27,6 +27,7 @@ interface StripProps {
   renderedMetrics?: Record<string, Metric>
   livePeak?: number
   editable: boolean
+  sourcePicker?: React.ReactNode
   onChange: (settings: TrackSettings) => void
 }
 
@@ -64,7 +65,7 @@ function AutomationEditor({ settings, sampleCount, onChange }: Pick<StripProps, 
   )
 }
 
-function Strip({ stem, settings, candidates, sampleCount, sampleRate, renderedMetrics, livePeak, editable, onChange }: StripProps) {
+function Strip({ stem, settings, candidates, sampleCount, sampleRate, renderedMetrics, livePeak, editable, sourcePicker, onChange }: StripProps) {
   const master = stem === 'master'
   const asset = candidates.find(item => item.id === settings.asset_id)
   const fader = settings.gain_db ?? 0
@@ -79,6 +80,7 @@ function Strip({ stem, settings, candidates, sampleCount, sampleRate, renderedMe
   return (
     <article className={`channel-strip track-${stem}${master ? ' master-strip' : ''}`}>
       <h3><i className="track-marker" aria-hidden="true" />{stemNames[stem]}</h3>
+      {sourcePicker}
       <div className="fader-section">
         <div className="fader-marks" aria-hidden="true"><span>+24</span><span>0</span><span>−30</span><span>−60</span><span>−80</span></div>
         <input className="fader" type="range" min={-80} max={24} step={0.1} disabled={!editable} value={fader} aria-label={`Fader ${stemNames[stem]} (dB)`} onChange={event => patch({ gain_db: Number(event.target.value) })} />
@@ -135,7 +137,7 @@ export function initialMixer(assets: AudioAsset[], saved: MixerSettings | null):
   return { tracks, master: saved?.master ?? { gain_db: 0, ceiling_dbtp: -1 } }
 }
 
-export function Mixer({ assets, versionLabels, analyses, settings, sampleCount, sampleRate, busy, master, live, liveAvailable, onLive, onChange, onRender, onListen }: {
+export function Mixer({ assets, versionLabels, analyses, settings, sampleCount, sampleRate, busy, rendering, master, live, liveAvailable, onLive, onChange, onRender, onShowRemix }: {
   assets: AudioAsset[]
   versionLabels: Map<string, string>
   analyses: Analysis[]
@@ -143,16 +145,17 @@ export function Mixer({ assets, versionLabels, analyses, settings, sampleCount, 
   sampleCount: number
   sampleRate: number
   busy: boolean
+  rendering: boolean
   master?: AudioAsset
   live?: LiveState
   liveAvailable: boolean
   onLive: () => void
   onChange: (settings: MixerSettings) => void
   onRender: () => void
-  onListen: (master: AudioAsset) => void
+  onShowRemix: (master: AudioAsset) => void
 }) {
   const selected = Object.values(settings.tracks).filter(track => track.asset_id)
-  const hasSolo = selected.some(track => track.solo && !track.mute)
+  const hasSolo = selected.some(track => track.solo)
   const hasSource = selected.some(track => !track.mute && (!hasSolo || track.solo))
   const loaded = audioMetrics(master)
   const size = master?.metadata.size_bytes
@@ -161,28 +164,27 @@ export function Mixer({ assets, versionLabels, analyses, settings, sampleCount, 
   const visibleChannels: LiveStem[] = showOriginal ? ['original', ...channels] : [...channels]
   return (
     <section className="panel mixer" aria-labelledby="mixer-title">
-      <header className="panel-heading"><h2 id="mixer-title">Console DSP</h2><button className="primary" type="button" disabled={busy || !hasSource} title={hasSource ? 'Ricompone le versioni selezionate e crea il master' : 'Seleziona e attiva almeno una sorgente approvata'} onClick={onRender}>Remix</button></header>
-      <div className="mixer-sources" role="group" aria-label="Versioni per il remix">
-        {visibleChannels.filter(stem => stem !== 'residual' || assets.some(asset => asset.stem === stem)).map(stem => {
-          const candidates = assets.filter(asset => asset.stem === stem).reverse()
-          return <label className={`channel-source track-${stem}`} key={stem}><span>Sorgente {stemNames[stem]}</span>
-            <select value={settings.tracks[stem]?.asset_id ?? ''} disabled={busy || !candidates.length} onChange={event =>
-              onChange({ ...settings, tracks: { ...settings.tracks, [stem]: { ...settings.tracks[stem], asset_id: event.target.value || undefined } } })}>
-              <option value="">{candidates.length ? 'Escludi dal remix' : 'Nessuna versione approvata'}</option>
-              {candidates.map(asset => <option key={asset.id} value={asset.id}>{versionLabels.get(asset.id) ?? (asset.kind === 'original' ? asset.name : 'Traccia separata')}{!versionLabels.has(asset.id) && candidates.filter(item => item.kind === asset.kind).length > 1 ? ` · ${new Date(asset.created_at).toLocaleString('it-IT')}` : ''}</option>)}
-            </select>
-          </label>
-        })}
-      </div>
+      <header className="panel-heading">
+        <div><h2 id="mixer-title">Console DSP</h2><p className="hint">Scegli una versione per canale. Remix crea la traccia Remixed nella timeline.</p></div>
+        <button className="primary" type="button" disabled={busy || rendering || !hasSource} title={hasSource ? 'Crea la traccia Remixed nella timeline' : 'Seleziona e attiva almeno una sorgente approvata'} onClick={onRender}>{rendering ? 'Remix in corso…' : 'Remix'}</button>
+      </header>
       <div className={`mixer-banks${showOriginal ? ' has-original' : ''}`}>
         {visibleChannels.map(stem => {
-          const approved = assets.filter(asset => asset.stem === stem)
+          const approved = assets.filter(asset => asset.stem === stem).reverse()
           const candidates = approved.map(asset => {
             const analysis = analyses.find(item => item.asset_id === asset.id)
             return analysis ? { ...asset, metadata: { ...asset.metadata, metrics: analysis.metrics } } : asset
           })
-          const selected = candidates.find(item => item.id === settings.tracks[stem]?.asset_id)
-          return <Strip key={stem} stem={stem} candidates={candidates} sampleCount={selected?.metadata.sample_count ?? sampleCount} sampleRate={selected?.metadata.sample_rate ?? sampleRate} renderedMetrics={master?.metadata.tracks?.[stem]} livePeak={live ? live.peaks[stem] ?? 0 : undefined} settings={settings.tracks[stem] ?? {}} editable={Boolean(selected)} onChange={track => onChange({ ...settings, tracks: { ...settings.tracks, [stem]: track } })} />
+          const track = settings.tracks[stem] ?? {}
+          const selected = candidates.find(item => item.id === track.asset_id)
+          const changeTrack = (next: TrackSettings) => onChange({ ...settings, tracks: { ...settings.tracks, [stem]: next } })
+          return <Strip key={stem} stem={stem} candidates={candidates} sampleCount={selected?.metadata.sample_count ?? sampleCount} sampleRate={selected?.metadata.sample_rate ?? sampleRate} renderedMetrics={master?.metadata.tracks?.[stem]} livePeak={live ? live.peaks[stem] ?? 0 : undefined} settings={track} editable={Boolean(selected)} onChange={changeTrack}
+            sourcePicker={<label className="channel-source"><span>Versione</span>
+              <select aria-label={`Sorgente ${stemNames[stem]}`} value={track.asset_id ?? ''} disabled={busy || !candidates.length} onChange={event => changeTrack({ ...track, asset_id: event.target.value || undefined })}>
+                <option value="">{candidates.length ? 'Escludi dal remix' : 'Nessuna versione approvata'}</option>
+                {candidates.map(asset => <option key={asset.id} value={asset.id}>{versionLabels.get(asset.id) ?? (asset.kind === 'original' ? asset.name : 'Traccia separata')}{!versionLabels.has(asset.id) && candidates.filter(item => item.kind === asset.kind).length > 1 ? ` · ${new Date(asset.created_at).toLocaleString('it-IT')}` : ''}</option>)}
+              </select>
+            </label>} />
         })}
         <Strip stem="master" settings={settings.master} candidates={[]} sampleCount={sampleCount} sampleRate={sampleRate} renderedMetrics={loaded} livePeak={live ? live.peaks.master ?? 0 : undefined} editable={hasSource} onChange={config => onChange({ ...settings, master: config })} />
       </div>
@@ -190,10 +192,10 @@ export function Mixer({ assets, versionLabels, analyses, settings, sampleCount, 
         <span className="hint">{showOriginal ? 'La console usa l’originale finché non ci sono stem approvati. ' : 'Il residuo può reintrodurre contaminazioni. '}EQ, compressore e limiter operano anche nel monitor live. Il render verifica il true peak del file.{live?.limiterDelayMs ? ` Lookahead live: ${formatNumber.format(live.limiterDelayMs)} ms.` : ''}</span>
         <div className="button-cluster">
           <button type="button" disabled={!liveAvailable || Boolean(live?.playing)} onClick={onLive}>Ascolta mix live</button>
-          <button type="button" disabled={!master} onClick={() => { if (master) onListen(master) }}>Ascolta master</button>
+          {master && <button type="button" onClick={() => onShowRemix(master)}>Vai a Remixed</button>}
         </div>
       </div>
-      {master && <details className="master-metrics"><summary>Misure ultimo master{typeof size === 'number' ? ` · ${fileSize(size)}` : ''}</summary><MetricList metrics={masterMetrics} />
+      {master && <details className="master-metrics"><summary>Misure Remixed{typeof size === 'number' ? ` · ${fileSize(size)}` : ''}</summary><MetricList metrics={masterMetrics} />
         {Array.isArray(master.metadata.warnings) && master.metadata.warnings.length > 0 && <ul className="export-warnings">{master.metadata.warnings.map((warning: string) => <li key={warning}>{warning}</li>)}</ul>}
       </details>}
     </section>

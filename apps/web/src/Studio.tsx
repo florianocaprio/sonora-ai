@@ -15,12 +15,12 @@ import { TransportBar, useTransport } from './Transport'
 type View = 'studio' | 'projects' | 'models' | 'report' | 'settings'
 type Icon = 'studio' | 'projects' | 'models' | 'report' | 'settings'
 
-const trackOrder: Stem[] = ['original', 'dialogue', 'music', 'effects', 'residual', 'master', 'difference']
+const trackOrder: Stem[] = ['original', 'master', 'dialogue', 'music', 'effects', 'residual', 'difference']
 const views: { id: View; label: string }[] = [
   { id: 'projects', label: 'Progetti' }, { id: 'studio', label: 'Studio' }, { id: 'models', label: 'Modelli' },
   { id: 'report', label: 'Report' }, { id: 'settings', label: 'Impostazioni' },
 ]
-const jobNames: Record<string, string> = { import: 'Importazione', separate: 'Separazione', analyze: 'Analisi', restore: 'Restauro', mix: 'Mix DSP', export: 'Esportazione', install_model: 'Installazione modello' }
+const jobNames: Record<string, string> = { import: 'Importazione', separate: 'Separazione', analyze: 'Analisi', restore: 'Restauro', mix: 'Remix', export: 'Esportazione', install_model: 'Installazione modello' }
 const jobStatuses: Record<JobStatus, string> = { queued: 'In coda', running: 'In corso', cancelling: 'Annullamento', cancelled: 'Annullato', succeeded: 'Completato', failed: 'Errore', blocked: 'Bloccato' }
 const modelStatuses: Record<string, string> = { available: 'Disponibile', ready: 'Pronto', installed: 'Installato', verified: 'Verificato', blocked: 'Bloccato', missing: 'Da installare' }
 const displayDate = new Intl.DateTimeFormat('it-IT', { dateStyle: 'medium', timeStyle: 'short' })
@@ -350,11 +350,19 @@ function ProjectStudio({ project, health, models, selectedModelId, setSelectedMo
   const [backend, setBackend] = useState('cpu')
   const [regionalSeparation, setRegionalSeparation] = useState(false)
   const [draftMixer, setDraftMixer] = useState<{ sourceId: string; settings: MixerSettings }>()
+  const [pendingRemix, setPendingRemix] = useState<{ jobId: string; sourceId: string }>()
+  const timeline = useRef<HTMLDivElement>(null)
   const path = projectPath(project.id)
   const mutable = !busy && !project.archived
   const active = project.assets.find(asset => asset.id === activeId) ?? original
   function rootSource(asset?: AudioAsset): AudioAsset | undefined {
     if (!asset || asset.stem === 'original' && asset.kind === 'original') return asset
+    if (asset.stem === 'master') {
+      const inputs = Object.values(asset.metadata.inputs ?? {}).map(id =>
+        rootSource(project.assets.find(item => item.id === id && item.stem !== 'master')))
+      const first = inputs[0]
+      return first && inputs.every(input => input?.id === first.id) ? first : undefined
+    }
     if (!asset.parent_id) return undefined
     return rootSource(project.assets.find(item => item.id === asset.parent_id))
   }
@@ -362,30 +370,33 @@ function ProjectStudio({ project, health, models, selectedModelId, setSelectedMo
   const count = source?.metadata.sample_count ?? active?.metadata.sample_count ?? 0
   const rate = source?.metadata.sample_rate ?? active?.metadata.sample_rate ?? 0
   const projectViewport = viewport.end_sample && viewport.end_sample <= count ? viewport : { start_sample: 0, end_sample: count }
-  const master = [...project.assets].reverse().find(asset => asset.stem === 'master' && asset.status === 'approved' &&
-    asset.metadata.sample_rate === rate && asset.metadata.sample_count === count)
   const relevantAnalysis = project.analyses.find(analysis => analysis.asset_id === active?.id)
   const selectedEvent = relevantAnalysis?.events.find(event => event.id === eventId)
   const sourceAssets = useMemo(() => project.assets.filter(asset => rootSource(asset)?.id === source?.id), [project.assets, source])
+  const master = sourceAssets.filter(asset => asset.stem === 'master' && asset.status === 'approved' &&
+    asset.metadata.sample_rate === rate && asset.metadata.sample_count === count).at(-1)
+  const remixJob = project.jobs.find(job => job.id === pendingRemix?.jobId)
   const versionLabels = useMemo(() => restorationVersionLabels(sourceAssets), [sourceAssets])
   const versions = sourceAssets.filter(asset => asset.stem === active?.stem || asset.stem === 'difference' && sourceAssets.some(item => item.stem === active?.stem && item.id === asset.parent_id)).reverse()
-  const candidate = active?.kind === 'restored' ? active : versions.find(asset => asset.kind === 'restored' && asset.parent_id === active?.id && asset.status !== 'rejected')
-  const baseline = candidate ? project.assets.find(asset => asset.id === candidate.parent_id) : active
+  const compareRemix = Boolean(master && (active?.stem === 'master' || active?.id === source?.id))
+  const restoredCandidate = active?.kind === 'restored' ? active : versions.find(asset => asset.kind === 'restored' && asset.parent_id === active?.id && asset.status !== 'rejected')
+  const candidate = compareRemix ? (active?.stem === 'master' ? active : master) : restoredCandidate
+  const baseline = compareRemix ? source : candidate ? project.assets.find(asset => asset.id === candidate.parent_id) : active
   const relevantDefects = relevantAnalysis?.events.map(event => ({ ...event, start_sample: event.start_sample + (active?.metadata.start_sample ?? 0), end_sample: event.end_sample + (active?.metadata.start_sample ?? 0) })) ?? []
   const timelineAssets = trackOrder.flatMap(stem => {
     if (stem === active?.stem) return [active]
     if (stem === 'original') return source ? [source] : []
     if (stem === 'difference') {
-      const delta = project.assets.find(asset => asset.stem === 'difference' && asset.parent_id === candidate?.id && asset.status !== 'rejected')
+      const delta = project.assets.find(asset => asset.stem === 'difference' && asset.parent_id === restoredCandidate?.id && asset.status !== 'rejected')
       return delta ? [delta] : []
     }
-    if (stem === 'master') return master?.metadata.sample_count === count && master?.metadata.sample_rate === rate ? [master] : []
+    if (stem === 'master') return master ? [master] : []
     const usable = project.assets.filter(asset => asset.stem === stem && asset.status === 'approved' && (!source || rootSource(asset)?.id === source.id))
     const latest = usable.at(-1)
     return latest ? [latest] : []
   })
   const mixerAssets = useMemo(
-    () => sourceAssets.filter(asset => asset.status === 'approved' && asset.kind !== 'preview' &&
+    () => sourceAssets.filter(asset => asset.status === 'approved' && asset.kind !== 'preview' && asset.stem !== 'master' &&
       asset.metadata.sample_count === count && asset.metadata.sample_rate === rate &&
       asset.metadata.channels === source?.metadata.channels && (asset.metadata.start_sample ?? 0) === 0),
     [sourceAssets, source, count, rate],
@@ -457,7 +468,15 @@ function ProjectStudio({ project, health, models, selectedModelId, setSelectedMo
 
   async function render() {
     const tracks = Object.fromEntries(Object.entries(selectedMix.tracks).filter(([, track]) => track.asset_id))
-    await onQueue(path + '/mix', { tracks, master: selectedMix.master })
+    if (!source) return
+    const job = await onQueue(path + '/mix', { tracks, master: selectedMix.master })
+    if (job) setPendingRemix({ jobId: job.id, sourceId: source.id })
+  }
+
+  function showRemix(asset: AudioAsset) {
+    select(asset)
+    transport.select(asset)
+    timeline.current?.scrollIntoView({ block: 'start' })
   }
 
   const lastSource = useRef<string | undefined>(undefined)
@@ -468,6 +487,14 @@ function ProjectStudio({ project, health, models, selectedModelId, setSelectedMo
       transport.select(monitoring, monitoring.metadata.start_sample ?? 0, false)
     }
   }, [transport, source, active])
+
+  useEffect(() => {
+    if (!remixJob || isActive(remixJob)) return
+    setPendingRemix(undefined)
+    if (remixJob.status !== 'succeeded' || source?.id !== pendingRemix?.sourceId) return
+    const asset = sourceAssets.find(item => item.stem === 'master' && item.metadata.job_id === remixJob.id)
+    if (asset) showRemix(asset)
+  }, [remixJob, pendingRemix, source, sourceAssets, transport])
 
   useEffect(() => {
     function keyboard(event: KeyboardEvent) {
@@ -496,12 +523,15 @@ function ProjectStudio({ project, health, models, selectedModelId, setSelectedMo
       </section>
       {!source && <div className="panel timeline-empty"><span className="empty-wave" aria-hidden="true">⌁</span><p>La timeline si popola dopo l’importazione.</p></div>}
       {source && <div className="studio-workspace">
-        <div className="studio-center">
-          <Timeline projectId={project.id} assets={timelineAssets} active={active} monitorId={transport.active?.id} sampleCount={count} sampleRate={rate} position={transport.position} region={region} viewport={projectViewport} events={relevantDefects} selectedEventId={eventId} onSelect={select} onListen={asset => transport.select(asset)} onSeek={transport.seek} onSelectRegion={setRegion} onViewport={setViewport} onDefect={event => {
+        <div className="studio-center" ref={timeline}>
+          <Timeline projectId={project.id} assets={timelineAssets} active={active} monitorId={transport.active?.id} sampleCount={count} sampleRate={rate} position={transport.position} region={region} viewport={projectViewport} events={relevantDefects} selectedEventId={eventId} onSelect={asset => asset.stem === 'master' ? showRemix(asset) : select(asset)} onListen={asset => {
+            if (asset.stem === 'master') select(asset)
+            transport.select(asset, transport.position >= count ? 0 : undefined, asset.stem === 'master' || transport.playing)
+          }} onSeek={transport.seek} onSelectRegion={setRegion} onViewport={setViewport} onDefect={event => {
             const local = relevantAnalysis?.events.find(item => item.id === event.id)
             if (local) selectDefect(local)
           }} />
-          <TransportBar transport={transport} sampleCount={count} sampleRate={rate} region={region} baseline={monitorData(baseline)} candidate={monitorData(candidate)} />
+          <TransportBar transport={transport} sampleCount={count} sampleRate={rate} region={region} baseline={monitorData(baseline)} candidate={monitorData(candidate)} compareRemix={compareRemix} />
         </div>
         <Inspector key={active?.id ?? 'none'} versionLabels={versionLabels} restorationTracks={restorationTracks}
           draftKey={active && `sonora.restoration.draft.${project.id}.${source.id}.${active.stem}`}
@@ -528,8 +558,8 @@ function ProjectStudio({ project, health, models, selectedModelId, setSelectedMo
             await onRequest(async () => { await request(assetPath(project.id, asset.id), { method: 'PATCH', data: { status } }); await onChange() })
           }} />
       </div>}
-      {source && <Mixer assets={mixerAssets} versionLabels={versionLabels} analyses={project.analyses} settings={selectedMix} sampleCount={count} sampleRate={rate} busy={!mutable} master={master} live={transport.liveMode ? transport.liveState : undefined} liveAvailable={monitorConfig.tracks.length > 0}
-        onLive={transport.startLive} onChange={settings => setDraftMixer({ sourceId: source.id, settings })} onRender={() => void render()} onListen={asset => transport.select(asset)} />}
+      {source && <Mixer assets={mixerAssets} versionLabels={versionLabels} analyses={project.analyses} settings={selectedMix} sampleCount={count} sampleRate={rate} busy={!mutable} rendering={Boolean(pendingRemix)} master={master} live={transport.liveMode ? transport.liveState : undefined} liveAvailable={monitorConfig.tracks.length > 0}
+        onLive={transport.startLive} onChange={settings => setDraftMixer({ sourceId: source.id, settings })} onRender={() => void render()} onShowRemix={showRemix} />}
     </>
   )
 }

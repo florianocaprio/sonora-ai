@@ -28,6 +28,7 @@ export interface AudioAsset {
     sample_count: number
     start_sample?: number
     profile?: Profile
+    inputs?: Partial<Record<Stem, string>>
     channels?: number
     codec?: string
     original_filename?: string
