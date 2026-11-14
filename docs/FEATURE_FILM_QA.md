@@ -21,7 +21,7 @@
 
 Le stesse patch sono state applicate e approvate sugli stem integrali in Docker. Il confronto binario ha verificato che i soli frame diversi sono i 1.440 di Dialoghi e i 2.160 di Effetti nelle rispettive maschere. L’RMSE misurato sui file restaurati integrali è 0,010002 per Dialoghi e 0,004152 per Effetti.
 
-Il mix finale usa i tre stem integrali, le due patch approvate, EQ e compressione su Dialoghi e master e limiter true peak sul master. Il WAV float32 misura **−1,19922 dBTP**, con ceiling −1 dBTP e 3,54 dB di riduzione massima del limiter.
+Il mix finale in Docker usa i tre stem integrali, le due patch approvate, EQ e compressione su Dialoghi e master e limiter true peak sul master. Il WAV float32 misura **−1,19922 dBTP**, con ceiling −1 dBTP e 3,54 dB di riduzione massima del limiter. Il master esportato in PCM 24 bit misura **−1,19922 dBTP** dopo quantizzazione e −1,2 dBTP nella misura FFmpeg. Il master e i tre stem esportati conservano 268.113.024 frame mono a 48 kHz. Gli SHA-256 dei quattro WAV, del manifest JSON e del report HTML corrispondono alla ricevuta di esportazione. L’export non riporta avvisi.
 
 Nel primo test Chromium sulle versioni restaurate, le scansioni simultanee delle forme d’onda hanno ritardato l’avvio del PCM. Le viste superiori a un minuto ora richiedono una forma d’onda alla volta. Due ripetizioni Playwright sul container aggiornato hanno verificato che il monitor avanza mentre una forma d’onda è ancora in attesa, che riceve campioni da almeno tre stem e che il seek vicino ai titoli funziona.
 
