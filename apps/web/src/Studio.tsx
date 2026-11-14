@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { DragEvent, FormEvent } from 'react'
 import {
   API, assetPath, audioMetrics, fileSize, formatNumber, formatTime, isActive, jobPath, localArtifactUrl, modelPath, preferredAsset, projectPath, request,
@@ -8,6 +8,7 @@ import type {
 } from './api'
 import { Inspector } from './Inspector'
 import { initialMixer, Mixer } from './Mixer'
+import { liveMixConfig } from './liveMix'
 import { Timeline } from './Timeline'
 import { TransportBar, useTransport } from './Transport'
 
@@ -149,6 +150,7 @@ function ModelCatalog({ models, busy, onInstall, onVerify, selectedId }: {
             <header><h3>{model.name}</h3><span className={`job-status model-${model.status}`}>{modelStatuses[model.status] ?? model.status}</span></header>
             <p className="hint">{model.status_detail}</p>
             <dl className="metrics-list">
+              <div><dt>Uso</dt><dd>{model.task === 'inpainting' ? 'Inpainting neurale' : 'Separazione'}</dd></div>
               <div><dt>Backend</dt><dd>{model.backends.length ? model.backends.map(item => item.toUpperCase()).join(', ') : 'Indisponibile'}</dd></div>
               {model.native_sample_rate && <div><dt>Ingresso nativo</dt><dd>{formatNumber.format(model.native_sample_rate / 1000)} kHz · {model.native_channels ?? 'N/D'} ch</dd></div>}
               <div><dt>Licenza codice</dt><dd>{model.code_license ?? 'N/D'}</dd></div>
@@ -349,7 +351,6 @@ function ProjectStudio({ project, health, models, selectedModelId, setSelectedMo
   const [draftMixer, setDraftMixer] = useState<MixerSettings>()
   const path = projectPath(project.id)
   const mutable = !busy && !project.archived
-  const transport = useTransport(project.id, region)
   const active = project.assets.find(asset => asset.id === activeId) ?? original
   function rootSource(asset?: AudioAsset): AudioAsset | undefined {
     if (!asset || asset.stem === 'original' && asset.kind === 'original') return asset
@@ -380,9 +381,15 @@ function ProjectStudio({ project, health, models, selectedModelId, setSelectedMo
     const latest = usable.at(-1)
     return latest ? [latest] : []
   })
-  const mixerAssets = project.assets.filter(asset => asset.stem === 'master' || !source || rootSource(asset)?.id === source.id)
-  const selectedMix = initialMixer(mixerAssets, draftMixer ?? project.mixer)
-  const model = models.find(item => item.id === selectedModelId) ?? models.find(item => item.status === 'installed' || item.status === 'verified') ?? models[0]
+  const mixerAssets = useMemo(
+    () => project.assets.filter(asset => asset.stem === 'master' || !source || rootSource(asset)?.id === source.id),
+    [project.assets, source],
+  )
+  const selectedMix = useMemo(() => initialMixer(mixerAssets, draftMixer ?? project.mixer), [mixerAssets, draftMixer, project.mixer])
+  const monitorConfig = useMemo(() => liveMixConfig(mixerAssets, selectedMix, rate, count), [mixerAssets, selectedMix, rate, count])
+  const transport = useTransport(project.id, region, monitorConfig)
+  const separationModels = models.filter(item => item.task !== 'inpainting')
+  const model = separationModels.find(item => item.id === selectedModelId) ?? separationModels.find(item => item.status === 'installed' || item.status === 'verified') ?? separationModels[0]
   const selectedBackend = model?.backends.includes(backend) ? backend : model?.backends[0]
   const canSeparate = Boolean(source && model && ['installed', 'verified'].includes(model.status) && selectedBackend && mutable)
 
@@ -454,7 +461,7 @@ function ProjectStudio({ project, health, models, selectedModelId, setSelectedMo
     function keyboard(event: KeyboardEvent) {
       if (event.code !== 'Space' || event.repeat || event.metaKey || event.ctrlKey || event.altKey || event.shiftKey ||
         !(event.target instanceof HTMLElement) || event.target.closest('input, textarea, select, button, a, summary, [contenteditable="true"]') ||
-        !transport.active) return
+        !transport.ready) return
       event.preventDefault()
       transport.toggle()
     }
@@ -467,7 +474,7 @@ function ProjectStudio({ project, health, models, selectedModelId, setSelectedMo
       <ImportPanel original={source} originals={originals} onSelect={select} busy={busy} archived={project.archived} health={health} onImport={(file, selectedRate) => void importAudio(file, selectedRate)} />
       <section className="panel separation" aria-label="Separazione AI">
         <h2>Separazione AI</h2>
-        <label><span className="sr-only">Modello di separazione</span><select value={model?.id ?? ''} disabled={!models.length} onChange={event => setSelectedModelId(event.target.value)}><option value="" disabled>Modelli indisponibili</option>{models.map(item => <option value={item.id} key={item.id}>{item.name} · {modelStatuses[item.status] ?? item.status}</option>)}</select></label>
+        <label><span className="sr-only">Modello di separazione</span><select value={model?.id ?? ''} disabled={!separationModels.length} onChange={event => setSelectedModelId(event.target.value)}><option value="" disabled>Modelli indisponibili</option>{separationModels.map(item => <option value={item.id} key={item.id}>{item.name} · {modelStatuses[item.status] ?? item.status}</option>)}</select></label>
         <label><span className="sr-only">Backend di separazione</span><select value={selectedBackend ?? ''} disabled={!model?.backends.length} onChange={event => setBackend(event.target.value)}><option value="" disabled>Backend</option>{model?.backends.map(item => <option key={item} value={item}>{item.toUpperCase()}</option>)}</select></label>
         <label className="inline-check" title={region ? 'Calcola un’anteprima della regione selezionata' : 'Seleziona prima una regione'}><input type="checkbox" checked={regionalSeparation && Boolean(region)} disabled={!region} onChange={event => setRegionalSeparation(event.target.checked)} /> Solo regione</label>
         {model && !['installed', 'verified'].includes(model.status) && <button type="button" onClick={() => onNavigate('models')}>Gestisci modello</button>}
@@ -484,7 +491,7 @@ function ProjectStudio({ project, health, models, selectedModelId, setSelectedMo
           }} />
           <TransportBar transport={transport} sampleCount={count} sampleRate={rate} region={region} baseline={monitorData(baseline)} candidate={monitorData(candidate)} />
         </div>
-        <Inspector key={active?.id ?? 'none'} asset={active} versions={versions} analysis={relevantAnalysis} selectedEvent={selectedEvent} region={region} busy={!mutable}
+        <Inspector key={active?.id ?? 'none'} inpaintModel={models.find(item => item.task === 'inpainting')} asset={active} versions={versions} analysis={relevantAnalysis} selectedEvent={selectedEvent} region={region} busy={!mutable}
           onAnalyze={async ({ depth, sensitivity, region }: { depth: Depth; sensitivity: number; region?: Region }) => {
             if (active) await onQueue(path + '/analyze', { asset_id: active.id, depth, sensitivity, ...region })
           }}
@@ -505,7 +512,8 @@ function ProjectStudio({ project, health, models, selectedModelId, setSelectedMo
             await onRequest(async () => { await request(assetPath(project.id, asset.id), { method: 'PATCH', data: { status } }); await onChange() })
           }} />
       </div>}
-      {source && <Mixer assets={mixerAssets} analyses={project.analyses} settings={selectedMix} sampleCount={count} sampleRate={rate} busy={!mutable} master={master} onChange={setDraftMixer} onRender={() => void render()} onListen={asset => transport.select(asset)} />}
+      {source && <Mixer assets={mixerAssets} analyses={project.analyses} settings={selectedMix} sampleCount={count} sampleRate={rate} busy={!mutable} master={master} live={transport.liveMode ? transport.liveState : undefined} liveAvailable={monitorConfig.tracks.length > 0}
+        onLive={transport.startLive} onChange={setDraftMixer} onRender={() => void render()} onListen={asset => transport.select(asset)} />}
     </>
   )
 }

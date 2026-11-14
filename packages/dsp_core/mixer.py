@@ -3,6 +3,7 @@
 from contextlib import ExitStack
 from dataclasses import dataclass
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 import numpy as np
 from scipy import signal
@@ -13,8 +14,9 @@ from packages.audio_core.io import (
     BLOCK, Cancelled, Progress, atomic_destination, audio_info, check_cancel, float_writer, require_finite,
 )
 from packages.audio_core.metrics import SignalMetrics, loudness
+from .limiter import LimiterSettings, limit_master
 
-VERSION = "sonora-dsp/1"
+VERSION = "sonora-dsp/2"
 TRACKS = {"dialogue", "music", "effects", "residual", "original"}
 
 
@@ -100,7 +102,7 @@ class _Chain:
         if not isinstance(config, dict):
             raise ValueError("Le impostazioni di un canale devono essere un oggetto JSON.")
         common = {"gain_db", "trim_db", "bypass", "eq", "compressor"}
-        allowed = common | ({"ceiling_dbtp"} if master else {"pan", "mute", "solo", "polarity", "automation"})
+        allowed = common | ({"ceiling_dbtp", "limiter"} if master else {"pan", "mute", "solo", "polarity", "automation"})
         unknown = config.keys() - allowed
         if unknown:
             raise ValueError(f"Impostazioni del mixer sconosciute: {', '.join(sorted(unknown))}.")
@@ -111,7 +113,7 @@ class _Chain:
         self.mute = _boolean(config.get("mute", residual), "Mute")
         self.solo = _boolean(config.get("solo", False), "Solo")
         self.polarity = -1 if _boolean(config.get("polarity", False), "Inverti polarità") else 1
-        self.minimum_ceiling = number(config["ceiling_dbtp"], "Ceiling in dBTP", -30, 0) if config.get("ceiling_dbtp") is not None else None
+        self.ceiling = number(config["ceiling_dbtp"], "Ceiling in dBTP", -30, 0) if config.get("ceiling_dbtp") is not None else None
         self.automation = {}
         self.rate = rate
         automation = config.get("automation")
@@ -228,11 +230,20 @@ def render_mix(inputs: dict[str, Path], destination: Path, config: dict, *,
         has_solo = any(chain.solo for chain in chains.values())
         selected = {stem: chain for stem, chain in chains.items() if not chain.mute and (not has_solo or chain.solo)}
         channels = 2 if input_channels == 2 or any(chain.pans_mono for chain in selected.values()) else 1
-        master = _Chain(config.get("master", {}), rate, channels, frames, master=True)
+        master_config = config.get("master", {})
+        master = _Chain(master_config, rate, channels, frames, master=True)
+        limiter = LimiterSettings.parse(master_config.get("limiter"))
+        active = limiter.enabled and not master.bypass
+        ceiling = -1.0 if limiter.enabled and master.ceiling is None else master.ceiling
+        limiter_info = limiter.describe(active=False)
         track_metrics = {stem: SignalMetrics(channels) for stem in audios}
         master_metrics = SignalMetrics(channels)
         with atomic_destination(destination, suffix=".wav") as temporary:
-            with float_writer(temporary, rate, channels, frames) as writer:
+            render_path = temporary
+            if active:
+                scratch = stack.enter_context(TemporaryDirectory(prefix=".limiter-", dir=destination.parent))
+                render_path = Path(scratch, "unlimited.wav")
+            with float_writer(render_path, rate, channels, frames) as writer:
                 for start in range(0, frames, BLOCK):
                     check_cancel(cancelled)
                     count = min(BLOCK, frames - start)
@@ -246,36 +257,45 @@ def render_mix(inputs: dict[str, Path], destination: Path, config: dict, *,
                         mixed += processed
                     result = master.apply(mixed, start, output_channels=channels).astype(np.float32)
                     require_finite(result)
-                    master_metrics.feed(result)
+                    if not active:
+                        master_metrics.feed(result)
                     writer.write(result)
                     if progress:
                         progress(start + count, frames)
-            metrics = master_metrics.as_dict()
-            measures = loudness(temporary, peak=metrics["sample_peak"], cancelled=cancelled)
+            if active:
+                metrics, measures, limiter_info = limit_master(render_path, temporary, ceiling=ceiling,
+                                                                settings=limiter, cancelled=cancelled)
+            else:
+                metrics = master_metrics.as_dict()
+                measures = loudness(temporary, peak=metrics["sample_peak"], cancelled=cancelled)
             check_cancel(cancelled)
         warnings = []
         if metrics["samples_at_or_above_full_scale"]:
             warnings.append("Il master float arriva a fondo scala o lo supera. Verificare il gain prima di esportare in PCM.")
         ceiling_exceeded = None
-        if master.minimum_ceiling is not None:
-            if measures["true_peak_dbtp"] is None:
+        true_peak = limiter_info["measured_true_peak_dbtp"] if active else measures["true_peak_dbtp"]
+        if ceiling is not None:
+            if active and true_peak is None and metrics["sample_peak"] == 0:
+                ceiling_exceeded = False
+            elif true_peak is None:
                 warnings.append("Il ceiling non è verificabile. Misura true peak non disponibile.")
             else:
-                ceiling_exceeded = measures["true_peak_dbtp"] > master.minimum_ceiling
+                ceiling_exceeded = true_peak > ceiling
                 if ceiling_exceeded:
                     warnings.append("True peak sopra il ceiling dichiarato. Regolare il master e ricalcolare.")
         metadata = audio_info(guide)
         metadata.update(channels=channels, channel_layout="stereo" if channels == 2 else "mono",
                         channel_order=["L", "R"] if channels == 2 else ["C"])
-        meters = {**metrics, "true_peak_dbtp": measures["true_peak_dbtp"],
+        meters = {**metrics, "true_peak_dbtp": true_peak,
                   "loudness": measures, "gain_reduction_db": master.gain_reduction}
         return {
             **metadata,
             **meters,
             "metrics": meters,
             "algorithm_version": VERSION,
-            "ceiling_dbtp": master.minimum_ceiling,
+            "ceiling_dbtp": ceiling,
             "ceiling_exceeded": ceiling_exceeded,
+            "limiter": limiter_info,
             "residual_included": "residual" in selected,
             "tracks": {stem: {**meter.as_dict(), "gain_reduction_db": chains[stem].gain_reduction,
                               "included": stem in selected} for stem, meter in track_metrics.items()},

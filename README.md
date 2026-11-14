@@ -27,13 +27,13 @@ Apri [lo studio in Docker](http://127.0.0.1:8765). Compose avvia i container `ap
 ## Prima sessione
 
 1. Crea un progetto e importa WAV, FLAC, AIFF, MP3 o AAC/M4A. Scegli la frequenza sorgente o di progetto. Consulta codec, canali e durata nello studio.
-2. In **Modelli** scarica DBS-TIGER DnR o Bandit V2 e verifica SHA-256. Seleziona modello e backend nello studio. Prova una regione breve o separa l'asset completo.
+2. In **Modelli** scarica DBS-TIGER DnR o Bandit V2 e verifica SHA-256. Seleziona modello e backend nello studio. Per il restauro neurale installa anche **Diffusion inpainting · Pianoforte**.
 3. Seleziona **Dialoghi**, **Musica** o **Effetti**. Analizza il segnale, scegli una regione o conferma un'anomalia. Consulta il grafico, l'ispettore e lo spettrogramma.
 4. In **Restauro** scegli Basic, Medium o High. Proponi una catena o aggiungi un processore con intervallo e parametri espliciti. Genera l'anteprima, ascolta la differenza e approva la versione che vuoi usare.
-5. Scegli le versioni approvate nella **Console DSP**, regola ed esegui **Render mix**. L'ascolto del master usa il segnale del renderer. Il residuo parte in mute.
+5. In **Console DSP**, scegli le versioni approvate e usa **Ascolta mix live** per regolare i livelli, il pan, mute e solo con un trasporto comune. Attiva il limiter true peak del master e usa **Render mix** per ascoltare ed esportare il risultato con EQ, dinamica e limiter. Il residuo parte in mute.
 6. In **Report** esporta WAV float32, WAV PCM 24 bit o FLAC 24 bit. Scarica master, tracce, manifest JSON e report HTML dallo studio. Gli stessi file restano nell'archivio locale.
 
-Il motore elabora l'audio in locale. La rete serve durante l'installazione iniziale e nelle operazioni esplicite di download dei modelli. Stereo dei due modelli significa elaborazione L/R indipendente. In High sono disponibili micro-gap ricostruiti per interpolazione locale fino a 20 ms. La matrice documenta i limiti aperti su restauro neurale, mastering e ascolto multitraccia.
+Il motore elabora l'audio in locale. La rete serve durante l'installazione iniziale e nelle operazioni esplicite di download dei modelli. Stereo dei due modelli significa elaborazione L/R indipendente. High include l'interpolazione di micro-gap fino a 20 ms e l'inpainting neurale sperimentale di regioni da 20 a 250 ms nello stem Musica. Il checkpoint è addestrato su pianoforte solo. Consulta [inpainting](docs/INPAINTING.md), [limiter](docs/LIMITER.md) e [mix live](docs/LIVE_MIX.md) per condizioni d'uso e verifiche.
 
 ## Comandi
 

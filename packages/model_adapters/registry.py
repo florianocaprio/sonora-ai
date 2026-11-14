@@ -24,7 +24,7 @@ class SeparationCancelled(InterruptedError):
     """Cancellation requested between bounded processing units."""
 
 
-class ModelManifest(TypedDict):
+class CheckpointManifest(TypedDict):
     id: str
     name: str
     authors: list[str]
@@ -37,6 +37,9 @@ class ModelManifest(TypedDict):
     checkpoint: str
     sha256: str
     size_bytes: int
+
+
+class ModelManifest(CheckpointManifest):
     sample_rate: int
     native_channels: int
     outputs: list[str]
@@ -97,7 +100,7 @@ def probe_capabilities(model_id: str) -> dict:
     }
 
 
-def checkpoint_path(model_dir: Path, manifest: ModelManifest) -> Path:
+def checkpoint_path(model_dir: Path, manifest: CheckpointManifest) -> Path:
     return model_dir / manifest["id"] / manifest["checkpoint"]
 
 
@@ -110,8 +113,7 @@ def _never_cancelled() -> bool:
     return False
 
 
-def _status(model_dir: Path, manifest: ModelManifest) -> dict:
-    capabilities = probe_capabilities(manifest["id"])
+def checkpoint_status(model_dir: Path, manifest: CheckpointManifest, capabilities: dict) -> dict:
     path = checkpoint_path(model_dir, manifest)
     try:
         size = path.stat().st_size
@@ -133,11 +135,22 @@ def _status(model_dir: Path, manifest: ModelManifest) -> dict:
 
 
 def list_models(model_dir: Path) -> list[dict]:
-    return [_status(model_dir, manifest) for manifest in _manifests().values()]
+    return [checkpoint_status(model_dir, manifest, probe_capabilities(manifest["id"]))
+            for manifest in _manifests().values()]
 
 
 def verify_model(model_dir: Path, model_id: str, *, cancelled: Cancelled = _never_cancelled) -> dict:
-    manifest = get_manifest(model_id)
+    return verify_checkpoint(model_dir, get_manifest(model_id), probe_capabilities(model_id), cancelled=cancelled)
+
+
+def verify_checkpoint(
+    model_dir: Path,
+    manifest: CheckpointManifest,
+    capabilities: dict,
+    *,
+    cancelled: Cancelled = _never_cancelled,
+) -> dict:
+    model_id = manifest["id"]
     path = checkpoint_path(model_dir, manifest)
     digest = hashlib.sha256()
     try:
@@ -149,7 +162,7 @@ def verify_model(model_dir: Path, model_id: str, *, cancelled: Cancelled = _neve
         raise ModelUnavailable(f"Checkpoint di {model_id} assente. Esegui sonora models install {model_id}.") from error
     if digest.hexdigest() != manifest["sha256"]:
         raise ModelUnavailable(f"SHA-256 errato per {model_id}. Reinstalla il checkpoint.")
-    return {**_status(model_dir, manifest), "status": "verified", "status_detail": "SHA-256 conforme al manifest."}
+    return {**checkpoint_status(model_dir, manifest, capabilities), "status": "verified", "status_detail": "SHA-256 conforme al manifest."}
 
 
 class _TLSRedirects(HTTPRedirectHandler):
@@ -166,12 +179,24 @@ def install_model(
     progress: Progress | None = None,
     cancelled: Cancelled = _never_cancelled,
 ) -> dict:
-    manifest = get_manifest(model_id)
+    return install_checkpoint(model_dir, get_manifest(model_id), probe_capabilities(model_id),
+                              progress=progress, cancelled=cancelled)
+
+
+def install_checkpoint(
+    model_dir: Path,
+    manifest: CheckpointManifest,
+    capabilities: dict,
+    *,
+    progress: Progress | None = None,
+    cancelled: Cancelled = _never_cancelled,
+) -> dict:
+    model_id = manifest["id"]
     path = checkpoint_path(model_dir, manifest)
     total = manifest["size_bytes"]
     if path.exists():
         try:
-            return verify_model(model_dir, model_id, cancelled=cancelled)
+            return verify_checkpoint(model_dir, manifest, capabilities, cancelled=cancelled)
         except ModelUnavailable:
             pass
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -212,4 +237,4 @@ def install_model(
     finally:
         if temporary_path is not None:
             temporary_path.unlink(missing_ok=True)
-    return {**_status(model_dir, manifest), "status": "verified", "status_detail": "SHA-256 conforme al manifest."}
+    return {**checkpoint_status(model_dir, manifest, capabilities), "status": "verified", "status_detail": "SHA-256 conforme al manifest."}

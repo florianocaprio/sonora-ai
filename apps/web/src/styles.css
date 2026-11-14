@@ -343,3 +343,6 @@ details > .metrics-list { margin-top: 0.55rem; }
   .timeline-tools { flex-wrap: wrap; justify-content: flex-end; gap: 0.25rem; }
   .timeline-tools > button, .timeline-tools .icon-button { min-width: 26px; font-size: 0.71rem; padding-inline: 0.27rem; }
 }
+
+.mixer-footer .button-cluster { flex-shrink: 0; flex-wrap: wrap; }
+@media (max-width: 640px) { .mixer-footer { flex-wrap: wrap; } }

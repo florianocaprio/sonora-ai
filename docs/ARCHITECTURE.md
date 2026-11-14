@@ -8,7 +8,7 @@ React/Vite → FastAPI /api/v1 → SQLite WAL + archivio di file
                PyTorch        NumPy/SciPy         FFmpeg
 ```
 
-- `apps/web` contiene lo studio e un solo trasporto browser con richieste Range, seek, loop, A/B e selezione di versione. L'ascolto del mixer usa il WAV prerenderizzato prodotto dal worker.
+- `apps/web` contiene lo studio e un trasporto browser con richieste Range per i file e PCM a blocchi per l’AudioWorklet multitraccia. Il WAV prodotto dal worker offre l’ascolto autorevole dei processori del render.
 - `packages/contracts` definisce i corpi Pydantic. Gli intervalli sono semiaperti e il backend usa interi fino a 64 bit. I numeri in TypeScript richiedono un valore rappresentabile esattamente, ampiamente sopra la durata dei media supportati.
 - `services/storage.py` applica lo schema SQLite v1 al primo avvio. Il database indicizza progetti, asset/versioni, analisi, job ed export. Ogni regione e risultato porta collegamenti di provenienza. I file inviati rimangono byte per byte in `uploads`, gli artefatti canonici in `work/<job-id>`. Una copia di progetto riusa l'audio immutabile tramite riferimento e possiede i propri identificativi e review.
 - `services/worker` reclama il job in transazione, aggiorna heartbeat e pubblica righe degli artefatti nella stessa transazione che completa il job. Il worker recupera gli interrotti all'avvio. Un retry riparte dall'input, rimuove il proprio staging parziale e conserva gli artefatti già pubblicati degli altri job. SQLite è autorevole per la visibilità degli output.
@@ -16,7 +16,7 @@ React/Vite → FastAPI /api/v1 → SQLite WAL + archivio di file
 
 ## ADR 001 · DSP autorevole in Python
 
-Il renderer unico NumPy/SciPy mantiene stato per blocchi e consente di verificare la corrispondenza tra mix ascoltato ed export. Lo studio usa una sorgente per il monitor e tra le versioni conserva il tempo di progetto. I cambi a/b richiedono il buffering del browser. Solo/mute, livello e processori DSP diventano udibili dopo il rendering. Questa scelta evita due implementazioni del grafo e semplifica il collaudo prima dell'introduzione di un motore di somma live.
+Il renderer unico NumPy/SciPy mantiene stato per blocchi e consente di verificare la corrispondenza tra mix ascoltato ed export. Il monitor live usa un clock AudioWorklet e applica livello, pan, solo, mute, polarità e automazioni alla somma in riproduzione. EQ, compressore e limiter agiscono nel renderer autorevole. La conversione interattiva al rate del dispositivo non entra nel file esportato.
 
 ## ADR 002 · Job e sicurezza su una sola macchina
 

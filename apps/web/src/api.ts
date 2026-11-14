@@ -3,7 +3,7 @@ export const API = '/api/v1'
 export type Stem = 'original' | 'dialogue' | 'music' | 'effects' | 'residual' | 'master' | 'difference'
 export type Profile = 'basic' | 'medium' | 'high'
 export type Depth = 'quick' | 'standard' | 'deep'
-export type OperationType = 'dc_remove' | 'dehum' | 'declick' | 'peq' | 'microgap'
+export type OperationType = 'dc_remove' | 'dehum' | 'declick' | 'peq' | 'microgap' | 'inpaint'
 export type Region = { start_sample: number; end_sample: number }
 export type Metric = string | number | boolean | null | Metric[] | { [key: string]: Metric }
 
@@ -34,6 +34,7 @@ export interface AudioAsset {
     rms_dbfs?: number | null
     true_peak_dbtp?: number | null
     loudness?: Record<string, Metric>
+    generated_regions?: (Region & { model_id?: string; classification?: 'generated' })[]
     tracks?: Partial<Record<Stem, Record<string, Metric>>>
     gain_reduction_db?: number | null
     stereo_correlation?: number | null
@@ -79,6 +80,7 @@ export interface Job {
 
 export interface Model {
   id: string
+  task?: 'separation' | 'inpainting'
   name: string
   status: string
   status_detail?: string
@@ -149,6 +151,7 @@ export interface TrackSettings {
   bypass?: boolean
   eq?: Equalizer[]
   compressor?: Compressor
+  limiter?: { enabled: boolean; lookahead_ms: number; release_ms: number }
   automation?: Partial<Record<'gain_db' | 'pan' | 'mute', AutomationPoint[]>>
 }
 
@@ -210,6 +213,25 @@ export async function request<T>(path: string, { method = 'GET', data, signal }:
     throw new Error(message || `Richiesta locale non riuscita (HTTP ${response.status}).`)
   }
   return await response.json() as T
+}
+
+export async function requestPCM(projectId: string, assetId: string, startSample: number, frames: number, signal?: AbortSignal): Promise<ArrayBuffer> {
+  const query = new URLSearchParams({ start_sample: String(startSample), frames: String(frames) })
+  const path = API + assetPath(projectId, assetId) + '/pcm?' + query
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const response = await fetch(path, {
+      credentials: 'same-origin',
+      headers: { 'X-Sonora-Token': await token() },
+      signal,
+    })
+    if (response.status === 401 && attempt === 0) {
+      session = undefined
+      continue
+    }
+    if (!response.ok) throw new Error(`Lettura PCM non riuscita (HTTP ${response.status}).`)
+    return response.arrayBuffer()
+  }
+  throw new Error('Sessione PCM non disponibile.')
 }
 
 export const projectPath = (projectId: string) => `/projects/${encodeURIComponent(projectId)}`

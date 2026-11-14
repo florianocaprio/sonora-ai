@@ -136,6 +136,34 @@ class StudioFlow(unittest.TestCase):
         self.assertEqual(self.client.get("/api/v1/session", headers={"Origin": "https://external.test"}).status_code, 403)
         self.assertEqual(self.client.get("/api/v1/session", headers={"Sec-Fetch-Site": "same-site"}).status_code, 403)
 
+    def test_pcm_stream_verifies_token_range_and_samples(self):
+        asset = self.upload()
+        path = f"/api/v1{self.project_path}/assets/{asset}/pcm"
+        query = "?start_sample=240&frames=48"
+        self.assertEqual(self.client.get(path + query).status_code, 401)
+        response = self.client.get(path + query, headers=self.headers)
+        self.assertEqual(response.headers["Content-Type"], "application/octet-stream")
+        original, _ = sf.read(io.BytesIO(self.original_bytes), dtype="float32")
+        np.testing.assert_array_equal(np.frombuffer(response.content, dtype="<f4"), original[240:288])
+        tail = self.client.get(path + "?start_sample=23999&frames=48", headers=self.headers)
+        self.assertEqual(len(tail.content), 4)
+        for query, code in (("?start_sample=24000&frames=48", 416),
+                            ("?start_sample=-1&frames=48", 422),
+                            ("?start_sample=0&frames=131073", 422)):
+            self.assertEqual(self.client.get(path + query, headers=self.headers).status_code, code)
+
+    def test_inpainting_contract_rejects_incompatible_input(self):
+        asset = self.upload()
+        operation = {"type": "inpaint", "start_sample": 12000, "end_sample": 16800, "params": {"seed": 7}}
+        body = {"asset_id": asset, "profile": "high", "operations": [operation]}
+        for invalid in (body,
+                        {**body, "profile": "basic"},
+                        {**body, "operations": [{**operation, "params": {"seed": 7.2}}]},
+                        {**body, "operations": [operation, operation]}):
+            self.call("POST", f"{self.project_path}/restore", body=invalid, expected=422)
+        self.call("POST", f"{self.project_path}/separate", expected=422,
+                  body={"asset_id": asset, "model_id": "diffusion-inpaint"})
+
     def test_cancel_retry_recover_and_idempotency(self):
         asset = self.upload()
         body = {"asset_id": asset}

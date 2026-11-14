@@ -10,4 +10,8 @@
 
 Gli agenti hanno usato aree non sovrapposte nel workspace inizialmente vuoto. Git era protetto durante le operazioni del sandbox. Il coordinatore usa il ramo di integrazione `codex/sonora-ai` e pubblica il ramo principale `main`. I risultati, i comandi e i limiti sono in [TEST_REPORT.md](TEST_REPORT.md). Il registro tecnico dei requisiti e delle lacune è in [REQUIREMENTS.md](REQUIREMENTS.md).
 
-Prossimi interventi verificabili sui requisiti parziali: trasferimento di sorgente allineata con provenienza, adattatore locale di denoising per dialogo, AudioWorklet streaming e prove di sincronizzazione su tracce lunghe, verifica del limiter su vettori di riferimento e benchmark più ampio. Le dipendenze di inpainting e i rispettivi checkpoint vanno qualificati per dominio, licenza e backend prima della loro disponibilità in studio.
+## Estensione High, mastering e monitor live
+
+Il ramo `codex/restoration-live-release` integra tre contributi paralleli. I riferimenti sono [inpainting](INPAINTING.md), [limiter](LIMITER.md) e [mix live](LIVE_MIX.md). Il coordinatore possiede contratto API, collegamento dei job, collaudo lungo e rilascio. SQLite resta allo schema v1. I nuovi parametri serializzati sono opzionali e la patch neurale usa la revisione delle versioni già prevista.
+
+Restano aperti il trasferimento di una sorgente alternativa con provenienza, il denoising specifico per dialoghi, la validazione dell’inpainting in altri domini, i processori dinamici nel monitor e l’estensione del confronto a un corpus più ampio.

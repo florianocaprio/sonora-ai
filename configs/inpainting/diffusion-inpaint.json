@@ -1,0 +1,22 @@
+{
+  "id": "diffusion-inpaint",
+  "name": "Diffusion inpainting · Pianoforte",
+  "authors": ["Eloi Moliner", "Vesa Välimäki"],
+  "repository": "https://github.com/eloimoliner/audio-inpainting-diffusion",
+  "code_revision": "28b0e92683d58d0ab12a73e675a4da387b00caa5",
+  "code_license": "MIT",
+  "weights_license": "MIT",
+  "weights_revision": "9d7358c7a6b157d925ee2255d122ab5ec93771fb",
+  "weights_url": "https://huggingface.co/Eloimoliner/audio-inpainting-diffusion/resolve/9d7358c7a6b157d925ee2255d122ab5ec93771fb/22k_8s-850000.pt?download=true",
+  "checkpoint": "22k_8s-850000.pt",
+  "sha256": "25436b182f906fbcfe19b5147937f7fb4226542230381fcecb77114bdba60d87",
+  "size_bytes": 712985958,
+  "task": "inpainting",
+  "native_sample_rate": 22050,
+  "native_channels": 1,
+  "training_context_samples": 184184,
+  "min_gap_ms": 20,
+  "max_gap_ms": 250,
+  "min_context_ms_per_side": 250,
+  "training_domain": "Pianoforte solo (MAESTRO)"
+}

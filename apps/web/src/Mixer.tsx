@@ -2,9 +2,11 @@ import { useState } from 'react'
 import { audioMetrics, fileSize, formatNumber, preferredAsset, stemNames } from './api'
 import type { Analysis, AudioAsset, AutomationPoint, Compressor, Metric, MixerSettings, Stem, TrackSettings } from './api'
 import { MetricList } from './Inspector'
+import type { LiveState, LiveStem } from './liveMixTypes'
 
 const channels = ['dialogue', 'music', 'effects', 'residual'] as const
 const eqDefault = { frequency_hz: 1000, gain_db: 0, q: 1 }
+const limiterDefault = { enabled: false, lookahead_ms: 5, release_ms: 80 }
 const compressorDefault: Compressor = { threshold_db: -20, ratio: 2, knee_db: 6, attack_ms: 10, release_ms: 80, makeup_db: 0 }
 
 const compressorFields = [
@@ -23,6 +25,7 @@ interface StripProps {
   sampleCount: number
   sampleRate: number
   renderedMetrics?: Record<string, Metric>
+  livePeak?: number
   editable: boolean
   onChange: (settings: TrackSettings) => void
 }
@@ -61,14 +64,17 @@ function AutomationEditor({ settings, sampleCount, onChange }: Pick<StripProps, 
   )
 }
 
-function Strip({ stem, settings, candidates, sampleCount, sampleRate, renderedMetrics, editable, onChange }: StripProps) {
+function Strip({ stem, settings, candidates, sampleCount, sampleRate, renderedMetrics, livePeak, editable, onChange }: StripProps) {
   const master = stem === 'master'
   const asset = candidates.find(item => item.id === settings.asset_id)
   const fader = settings.gain_db ?? 0
   const eq = settings.eq?.[0]
   const compressor = settings.compressor
-  const peak = renderedMetrics?.sample_peak_dbfs ?? audioMetrics(asset)?.sample_peak_dbfs
-  const meterTitle = renderedMetrics ? 'Picco misurato nell’ultimo render' : 'Picco misurato sul file'
+  const limiter = settings.limiter ?? limiterDefault
+  const peak = livePeak === undefined
+    ? renderedMetrics?.sample_peak_dbfs ?? audioMetrics(asset)?.sample_peak_dbfs
+    : Math.max(-90, 20 * Math.log10(livePeak))
+  const meterTitle = livePeak !== undefined ? 'Picco live' : renderedMetrics ? 'Picco misurato nell’ultimo render' : 'Picco misurato sul file'
   const patch = (partial: Partial<TrackSettings>) => onChange({ ...settings, ...partial })
   return (
     <article className={`channel-strip track-${stem}${master ? ' master-strip' : ''}`}>
@@ -77,7 +83,7 @@ function Strip({ stem, settings, candidates, sampleCount, sampleRate, renderedMe
       <div className="fader-section">
         <div className="fader-marks" aria-hidden="true"><span>+24</span><span>0</span><span>−30</span><span>−60</span><span>−80</span></div>
         <input className="fader" type="range" min={-80} max={24} step={0.1} disabled={!editable} value={fader} aria-label={`Fader ${stemNames[stem]} (dB)`} onChange={event => patch({ gain_db: Number(event.target.value) })} />
-        {typeof peak === 'number' && <meter className="peak-meter" min={-90} max={6} value={peak} low={-24} high={0} optimum={-12} aria-label={`${meterTitle} ${stemNames[stem]}`} title={`${meterTitle}: ${formatNumber.format(peak)} dBFS`} />}
+        {typeof peak === 'number' && <meter className="peak-meter" min={-90} max={6} value={Math.max(-90, Math.min(6, peak))} low={-24} high={0} optimum={-12} aria-label={`${meterTitle} ${stemNames[stem]}`} title={`${meterTitle}: ${formatNumber.format(peak)} dBFS`} />}
       </div>
       <label className="fader-value"><span className="sr-only">Valore fader {stemNames[stem]}</span><input type="number" min={-80} max={24} step={0.1} value={fader} disabled={!editable} onChange={event => patch({ gain_db: Number(event.target.value) })} /><small>dB</small></label>
       {!master && <div className="toggle-pair"><button type="button" disabled={!editable} aria-pressed={settings.mute ?? false} onClick={() => patch({ mute: !settings.mute })}>Mute</button><button type="button" disabled={!editable} aria-pressed={settings.solo ?? false} onClick={() => patch({ solo: !settings.solo })}>Solo</button></div>}
@@ -100,7 +106,14 @@ function Strip({ stem, settings, candidates, sampleCount, sampleRate, renderedMe
           {compressor && <div className="panel-flow nested-controls">
             {compressorFields.map(field => <label key={field.key}>{field.label}<input type="number" min={field.min} max={field.max} step={field.step} value={compressor[field.key]} onChange={event => patch({ compressor: { ...compressor, [field.key]: Number(event.target.value) } })} /></label>)}
           </div>}
-          {master && <label title="Soglia di verifica nel report. Nessun limiter automatico.">Ceiling (dBTP)<input type="number" min={-12} max={0} step={0.1} value={settings.ceiling_dbtp ?? -1} onChange={event => patch({ ceiling_dbtp: Number(event.target.value) })} /></label>}
+          {master && <>
+            <label title="Tetto true peak verificato sul render">Ceiling (dBTP)<input type="number" min={-30} max={0} step={0.1} value={settings.ceiling_dbtp ?? -1} onChange={event => patch({ ceiling_dbtp: Number(event.target.value) })} /></label>
+            <label className="inline-check" title="Opera sul master renderizzato"><input type="checkbox" checked={limiter.enabled} onChange={event => patch({ limiter: { ...limiter, enabled: event.target.checked } })} /> Limiter true peak</label>
+            {limiter.enabled && <div className="panel-flow nested-controls">
+              <label>Lookahead (ms)<input type="number" min={1} max={20} step={1} value={limiter.lookahead_ms} onChange={event => patch({ limiter: { ...limiter, lookahead_ms: Number(event.target.value) } })} /></label>
+              <label>Rilascio limiter (ms)<input type="number" min={10} max={1000} step={1} value={limiter.release_ms} onChange={event => patch({ limiter: { ...limiter, release_ms: Number(event.target.value) } })} /></label>
+            </div>}
+          </>}
           {!master && <details><summary>Automazioni</summary><AutomationEditor settings={settings} sampleCount={sampleCount} onChange={onChange} /></details>}
         </fieldset>
       </details>
@@ -125,7 +138,7 @@ export function initialMixer(assets: AudioAsset[], saved: MixerSettings | null):
   return { tracks, master: saved?.master ?? { gain_db: 0, ceiling_dbtp: -1 } }
 }
 
-export function Mixer({ assets, analyses, settings, sampleCount, sampleRate, busy, master, onChange, onRender, onListen }: {
+export function Mixer({ assets, analyses, settings, sampleCount, sampleRate, busy, master, live, liveAvailable, onLive, onChange, onRender, onListen }: {
   assets: AudioAsset[]
   analyses: Analysis[]
   settings: MixerSettings
@@ -133,6 +146,9 @@ export function Mixer({ assets, analyses, settings, sampleCount, sampleRate, bus
   sampleRate: number
   busy: boolean
   master?: AudioAsset
+  live?: LiveState
+  liveAvailable: boolean
+  onLive: () => void
   onChange: (settings: MixerSettings) => void
   onRender: () => void
   onListen: (master: AudioAsset) => void
@@ -145,7 +161,7 @@ export function Mixer({ assets, analyses, settings, sampleCount, sampleRate, bus
   const masterMetrics: Record<string, Metric> = { ...loaded }
   const originals = assets.filter(asset => asset.stem === 'original' && asset.status === 'approved' && asset.kind !== 'preview')
   const showOriginal = Boolean(settings.tracks.original?.asset_id) || !channels.slice(0, 3).some(stem => assets.some(asset => asset.stem === stem && asset.status === 'approved' && asset.kind !== 'preview'))
-  const visibleChannels: Stem[] = showOriginal ? ['original', ...channels] : [...channels]
+  const visibleChannels: LiveStem[] = showOriginal ? ['original', ...channels] : [...channels]
   return (
     <section className="panel mixer" aria-labelledby="mixer-title">
       <header className="panel-heading"><h2 id="mixer-title">Console DSP</h2><button className="primary" type="button" disabled={busy || !hasSource} title={hasSource ? 'Calcola il master per l’ascolto e l’export' : 'Seleziona e attiva almeno una sorgente approvata'} onClick={onRender}>Render mix</button></header>
@@ -157,13 +173,16 @@ export function Mixer({ assets, analyses, settings, sampleCount, sampleRate, bus
             return analysis ? { ...asset, metadata: { ...asset.metadata, metrics: analysis.metrics } } : asset
           })
           const selected = candidates.find(item => item.id === settings.tracks[stem]?.asset_id)
-          return <Strip key={stem} stem={stem} candidates={candidates} sampleCount={selected?.metadata.sample_count ?? sampleCount} sampleRate={selected?.metadata.sample_rate ?? sampleRate} renderedMetrics={master?.metadata.tracks?.[stem]} settings={settings.tracks[stem] ?? {}} editable={candidates.length > 0} onChange={track => onChange({ ...settings, tracks: { ...settings.tracks, [stem]: track } })} />
+          return <Strip key={stem} stem={stem} candidates={candidates} sampleCount={selected?.metadata.sample_count ?? sampleCount} sampleRate={selected?.metadata.sample_rate ?? sampleRate} renderedMetrics={master?.metadata.tracks?.[stem]} livePeak={live ? live.peaks[stem] ?? 0 : undefined} settings={settings.tracks[stem] ?? {}} editable={candidates.length > 0} onChange={track => onChange({ ...settings, tracks: { ...settings.tracks, [stem]: track } })} />
         })}
-        <Strip stem="master" settings={settings.master} candidates={[]} sampleCount={sampleCount} sampleRate={sampleRate} renderedMetrics={loaded} editable={hasSource} onChange={config => onChange({ ...settings, master: config })} />
+        <Strip stem="master" settings={settings.master} candidates={[]} sampleCount={sampleCount} sampleRate={sampleRate} renderedMetrics={loaded} livePeak={live ? live.peaks.master ?? 0 : undefined} editable={hasSource} onChange={config => onChange({ ...settings, master: config })} />
       </div>
       <div className="mixer-footer">
-        <span className="hint">{showOriginal ? 'La console usa l’originale finché non ci sono stem approvati. ' : 'Il residuo può reintrodurre contaminazioni. '}L’ascolto del master usa l’ultimo render.</span>
-        <button type="button" disabled={!master} onClick={() => { if (master) onListen(master) }}>Ascolta master</button>
+        <span className="hint">{showOriginal ? 'La console usa l’originale finché non ci sono stem approvati. ' : 'Il residuo può reintrodurre contaminazioni. '}EQ, compressore e limiter si ascoltano nel master renderizzato.</span>
+        <div className="button-cluster">
+          <button type="button" disabled={!liveAvailable || Boolean(live?.playing)} onClick={onLive}>Ascolta mix live</button>
+          <button type="button" disabled={!master} onClick={() => { if (master) onListen(master) }}>Ascolta master</button>
+        </div>
       </div>
       {master && <details className="master-metrics"><summary>Misure ultimo master{typeof size === 'number' ? ` · ${fileSize(size)}` : ''}</summary><MetricList metrics={masterMetrics} />
         {Array.isArray(master.metadata.warnings) && master.metadata.warnings.length > 0 && <ul className="export-warnings">{master.metadata.warnings.map((warning: string) => <li key={warning}>{warning}</li>)}</ul>}

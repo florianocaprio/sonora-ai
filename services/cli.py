@@ -57,7 +57,7 @@ def doctor(settings):
     import soundfile
     import torch
 
-    from packages.model_adapters import list_models
+    from services.model_catalog import list_models
 
     data = {**hardware(), "python": platform.python_version(), "python_binary": sys.executable,
             "torch": torch.__version__, "mps_built": torch.backends.mps.is_built(),
@@ -189,7 +189,7 @@ def cli():
         if args.command == "doctor":
             doctor(settings)
         elif args.command == "models":
-            from packages.model_adapters import install_model, list_models, verify_model
+            from services.model_catalog import install_model, list_models, verify_model
 
             if args.action == "list":
                 display(list_models(settings.models))

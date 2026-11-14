@@ -9,6 +9,7 @@ import shutil
 import signal
 import threading
 import time
+from contextlib import contextmanager
 from pathlib import Path
 
 from services.settings import Settings
@@ -97,6 +98,20 @@ class Task:
         }, self.payload["name"])
         return {"asset_id": identifier}
 
+    @contextmanager
+    def inference_lock(self):
+        self.settings.models.mkdir(parents=True, exist_ok=True, mode=0o700)
+        with (self.settings.models / "inference.lock").open("a+") as lock:
+            while not self.cancelled():
+                try:
+                    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except BlockingIOError:
+                    self.stop.wait(0.25)
+            if self.cancelled():
+                raise InterruptedError()
+            yield
+
     def separate(self):
         from packages.audio_core import trim_audio
         from packages.model_adapters import separate_audio
@@ -112,16 +127,7 @@ class Task:
             trim_audio(source, excerpt, start, end, progress=self.progress, cancelled=self.cancelled)
             source = excerpt
         self.phase("Inferenza locale")
-        self.settings.models.mkdir(parents=True, exist_ok=True, mode=0o700)
-        with (self.settings.models / "inference.lock").open("a+") as lock:
-            while not self.cancelled():
-                try:
-                    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                    break
-                except BlockingIOError:
-                    self.stop.wait(0.25)
-            if self.cancelled():
-                raise InterruptedError()
+        with self.inference_lock():
             metadata = separate_audio(source, self.folder, self.settings.models, self.payload["model_id"],
                                       self.payload["backend"], progress=self.progress, cancelled=self.cancelled)
         if region:
@@ -176,12 +182,18 @@ class Task:
         source = self.path(asset)
         output = self.folder / "restored.wav"
         self.phase("Elaborazione del piano di restauro")
-        metadata = restore(source, output, self.payload["operations"],
-                           progress=self.progress, cancelled=self.cancelled)
+        operations = self.payload["operations"]
+        generative = any(op["type"] == "inpaint" and not op.get("bypass") for op in operations)
+        if asset["status"] != "approved":
+            raise ValueError("La sorgente della patch richiede una versione approvata.")
+        if generative and asset["stem"] != "music":
+            raise ValueError("Il modello di inpainting è dedicato allo stem Musica.")
+        metadata = restore(source, output, operations, progress=self.progress, cancelled=self.cancelled,
+                           neural=self.neural_patch if generative else None)
         identifier = self.add_asset(asset["stem"], "restored", "proposed", asset["id"], output, {
             **inspect_audio(output), **metadata, "profile": self.payload["profile"],
-            "requested_operations": self.payload["operations"], "source_sha256": asset["metadata"]["sha256"],
-        })
+            "requested_operations": operations, "source_sha256": asset["metadata"]["sha256"],
+        }, "Patch generata · Musica" if generative else None)
         self.phase("Calcolo della differenza")
         delta = self.folder / "difference.wav"
         difference_audio(source, output, delta, cancelled=self.cancelled)
@@ -195,6 +207,17 @@ class Task:
         analysis = uid()
         self.artifacts.append(("analyses", (analysis, self.project, identifier, encode(after), now())))
         return {"asset_id": identifier, "difference_id": difference, "analysis_id": analysis}
+
+    def neural_patch(self, source, destination, operation):
+        from packages.inpainting import inpaint
+
+        self.phase("Inpainting neurale · Musica")
+        with self.inference_lock():
+            result = inpaint(source, destination, operation["start_sample"], operation["end_sample"],
+                             self.settings.models, seed=int(operation["params"].get("seed", 0)),
+                             progress=self.progress, cancelled=self.cancelled)
+        self.phase("Elaborazione del piano di restauro")
+        return result
 
     def mix(self):
         from packages.dsp_core import render_mix
@@ -253,8 +276,15 @@ class Task:
                                     sample_rate=self.payload["sample_rate"],
                                     progress=self.progress, cancelled=self.cancelled)
             if stem == "master":
-                ceiling = mix["metadata"]["config"]["master"].get("ceiling_dbtp")
+                ceiling = mix["metadata"].get("ceiling_dbtp", mix["metadata"]["config"]["master"].get("ceiling_dbtp"))
                 true_peak = measured.get("true_peak_dbtp")
+                if (mix["metadata"].get("limiter") or {}).get("active"):
+                    from packages.dsp_core.limiter import measure_true_peak
+
+                    native_peak = measure_true_peak(destination, cancelled=self.cancelled)
+                    measured["verification_true_peak_dbtp"] = native_peak
+                    measurements = [value for value in (true_peak, native_peak) if value is not None]
+                    true_peak = max(measurements, default=None)
                 if ceiling is not None and true_peak is None:
                     warnings.append("Ceiling dopo conversione non verificabile senza true peak.")
                 elif ceiling is not None and true_peak > ceiling:
@@ -263,6 +293,8 @@ class Task:
             provenance = []
             ancestor = asset
             while ancestor is not None:
+                if ancestor["status"] != "approved":
+                    raise ValueError("La provenienza contiene una versione non approvata. Renderizza di nuovo il master.")
                 provenance.append({key: ancestor[key] for key in ("id", "stem", "kind", "status", "metadata")})
                 ancestor = self.asset(ancestor["parent_id"]) if ancestor["parent_id"] else None
             records[stem] = {"version": asset_id, "output": filename, "measurement": measured,
@@ -287,7 +319,7 @@ class Task:
         return {"export_id": export_id}
 
     def install_model(self):
-        from packages.model_adapters import install_model
+        from services.model_catalog import install_model
 
         self.phase("Download e verifica del modello")
         return install_model(self.settings.models, self.payload["model_id"],

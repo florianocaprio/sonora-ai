@@ -20,8 +20,12 @@ __pycache__/
 *.m4a
 *.aac
 *.mpeg
+*.mkv
+*.mp4
 *.safetensors
 *.ckpt
 *.onnx
+*.pt
+*.pth
 playwright-report/
 test-results/

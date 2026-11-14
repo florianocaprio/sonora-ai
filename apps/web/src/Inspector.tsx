@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import type { Analysis, AudioAsset, Defect, Depth, Metric, Operation, OperationType, Profile, Region } from './api'
+import type { Analysis, AudioAsset, Defect, Depth, Metric, Model, Operation, OperationType, Profile, Region } from './api'
 import { formatNumber, formatTime, stemNames } from './api'
 
 type InspectorTab = 'analysis' | 'restoration' | 'versions'
@@ -10,6 +10,7 @@ const operationNames: Record<OperationType, string> = {
   declick: 'Riparazione click',
   peq: 'Equalizzatore parametrico',
   microgap: 'Interpolazione micro-gap',
+  inpaint: 'Inpainting neurale · Pianoforte',
 }
 
 const profiles: Record<Profile, string> = { basic: 'Basic', medium: 'Medium', high: 'High' }
@@ -35,6 +36,7 @@ interface Parameter {
 const commonFrequency = { key: 'frequency_hz', label: 'Frequenza (Hz)', min: 20, max: 20_000, step: 1, help: 'Centro della banda interessata.' }
 const commonQ = { key: 'q', label: 'Fattore Q', min: 0.1, max: 80, step: 0.1, help: 'Un fattore Q alto restringe la banda.' }
 const parameters: Record<OperationType, Parameter[]> = {
+  inpaint: [],
   dc_remove: [],
   dehum: [{ ...commonFrequency, initial: 50 }, { ...commonQ, initial: 30 }],
   declick: [{ key: 'threshold', label: 'Soglia', initial: 0.08, min: 0.001, max: 2, step: 0.001, help: 'Scostamento minimo del campione rispetto agli adiacenti.' }],
@@ -150,7 +152,10 @@ function Operations({ operations, rate, maxSample, onChange }: {
           <label>Inizio<input type="number" min={0} max={Math.max(0, op.end_sample - 1)} step={1} value={op.start_sample} onChange={event => update(index, { start_sample: Number(event.target.value) })} /></label>
           <label>Fine<input type="number" min={op.start_sample + 1} max={maxSample} step={1} value={op.end_sample} onChange={event => update(index, { end_sample: Number(event.target.value) })} /></label>
         </div>
-        <Knob value={Math.round(op.wet * 100)} param={{ key: 'wet', label: 'Wet (%)', initial: 100, min: 0, max: 100, step: 1, help: 'Miscela tra segnale in ingresso e segnale elaborato.' }} onChange={wet => update(index, { wet: wet / 100 })} />
+        {op.type === 'inpaint' ? (
+          <label>Seed<input type="number" min={0} max={2147483647} step={1} value={op.params.seed ?? 0}
+            onChange={event => update(index, { params: { seed: Number(event.target.value) } })} /></label>
+        ) : <Knob value={Math.round(op.wet * 100)} param={{ key: 'wet', label: 'Wet (%)', initial: 100, min: 0, max: 100, step: 1, help: 'Miscela tra segnale in ingresso e segnale elaborato.' }} onChange={wet => update(index, { wet: wet / 100 })} />}
         {parameters[op.type]?.map(param => (
           <Knob key={param.key} param={param.key === 'frequency_hz' ? { ...param, max: Math.min(param.max, Math.floor(rate * 0.49)) } : param} value={op.params[param.key] ?? param.initial} onChange={value => update(index, { params: { ...op.params, [param.key]: value } })} />
         ))}
@@ -170,9 +175,10 @@ function readPresets(): SavedPlan[] {
   }
 }
 
-export function Inspector({ asset, versions, analysis, selectedEvent, region, busy, onAnalyze, onDefect, onSaveDefect, onListenDefect, onPlan, onRestore, onSelectAsset, onListen, onVersionStatus }: {
+export function Inspector({ asset, versions, inpaintModel, analysis, selectedEvent, region, busy, onAnalyze, onDefect, onSaveDefect, onListenDefect, onPlan, onRestore, onSelectAsset, onListen, onVersionStatus }: {
   asset?: AudioAsset
   versions: AudioAsset[]
+  inpaintModel?: Model
   analysis?: Analysis
   selectedEvent: Defect | undefined
   region: Region | null
@@ -214,8 +220,15 @@ export function Inspector({ asset, versions, analysis, selectedEvent, region, bu
   const sampleRate = asset?.metadata.sample_rate ?? 0
   const sampleCount = asset?.metadata.sample_count ?? 0
 
+  const inpaintReady = ['installed', 'verified'].includes(inpaintModel?.status ?? '')
+  const inpaintAllowed = profile === 'high' && asset?.stem === 'music' && inpaintReady
+  const inpaintAdded = operations.some(op => op.type === 'inpaint' && !op.bypass)
+
   function newOperation() {
-    const target = selection ?? { start_sample: 0, end_sample: sampleCount }
+    const start = Math.ceil(sampleRate / 4)
+    const target = selection ?? (operationType === 'inpaint'
+      ? { start_sample: start, end_sample: start + Math.ceil(sampleRate / 10) }
+      : { start_sample: 0, end_sample: sampleCount })
     if (operationType === 'microgap') setProfile('high')
     setOperations([...operations, {
       ...target,
@@ -256,7 +269,7 @@ export function Inspector({ asset, versions, analysis, selectedEvent, region, bu
     setProfile(preset.profile)
     setOperations(preset.operations.map(op => {
       if (!selection) return { ...op, end_sample: Math.min(op.end_sample, sampleCount) }
-      const end = op.type === 'microgap'
+      const end = op.type === 'microgap' || op.type === 'inpaint'
         ? Math.min(selection.end_sample, selection.start_sample + op.end_sample - op.start_sample)
         : selection.end_sample
       return { ...op, start_sample: selection.start_sample, end_sample: end }
@@ -281,8 +294,17 @@ export function Inspector({ asset, versions, analysis, selectedEvent, region, bu
   }
 
   const canRestore = asset && asset.status === 'approved' && asset.kind !== 'preview' && !['master', 'difference', 'residual'].includes(asset.stem)
-  const invalidOperations = operations.some(op => op.start_sample < 0 || op.end_sample > sampleCount || op.end_sample <= op.start_sample ||
+  function invalidInpaint(op: Operation) {
+    const frames = op.end_sample - op.start_sample
+    const seed = op.params.seed ?? 0
+    return !inpaintAllowed || frames * 1000 < sampleRate * 20 || frames * 1000 > sampleRate * 250
+      || Math.min(op.start_sample, sampleCount - op.end_sample) * 4 < sampleRate
+      || !Number.isInteger(seed) || seed < 0 || seed > 2147483647
+  }
+
+  const invalidOperations = operations.filter(op => !op.bypass).filter(op => op.type === 'inpaint').length > 1 || operations.some(op => op.start_sample < 0 || op.end_sample > sampleCount || op.end_sample <= op.start_sample ||
     op.wet < 0 || op.wet > 1 || (op.type === 'microgap' && !op.bypass && (profile !== 'high' || (op.end_sample - op.start_sample) / sampleRate * 1000 > (op.params.max_duration_ms ?? 20))) ||
+    (op.type === 'inpaint' && !op.bypass && invalidInpaint(op)) ||
     (typeof op.params.frequency_hz === 'number' && op.params.frequency_hz > Math.floor(sampleRate * 0.49)))
 
   return (
@@ -324,14 +346,18 @@ export function Inspector({ asset, versions, analysis, selectedEvent, region, bu
             <div className="profile-selector" aria-label="Profilo di restauro">
               {Object.entries(profiles).map(([value, label]) => <button type="button" key={value} aria-pressed={profile === value} onClick={() => setProfile(value as Profile)}>{label}</button>)}
             </div>
-            <p className="hint">{profile === 'basic' ? 'Interventi conservativi su difetti tecnici.' : profile === 'medium' ? 'Interventi conservativi ed equalizzazione correttiva.' : 'Ricostruzione locale dei micro-gap fino a 20 ms, con approvazione. L’inpainting neurale è indisponibile.'}</p>
+            <p className="hint">{profile === 'basic' ? 'Interventi conservativi su difetti tecnici.' : profile === 'medium' ? 'Interventi conservativi ed equalizzazione correttiva.' : 'Ricostruzione di micro-gap e anteprima neurale di regioni musicali da approvare.'}</p>
+            {profile === 'high' && asset.stem === 'music' && <p className="hint">
+              {inpaintReady ? 'Modello sperimentale per pianoforte. Regione 20–250 ms, con almeno 250 ms ai lati.'
+                : 'Installa il modello di inpainting dalla pagina Modelli.'}
+            </p>}
             <button type="button" disabled={busy} onClick={() => void suggestPlan()}>Proponi catena</button>
             <Operations operations={operations} rate={sampleRate} maxSample={sampleCount} onChange={setOperations} />
             <div className="field-action">
-              <select aria-label="Processore di restauro" value={operationType} onChange={event => setOperationType(event.target.value as OperationType)}>{Object.entries(operationNames).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select>
-              <button type="button" onClick={newOperation}>Aggiungi</button>
+              <select aria-label="Processore di restauro" value={operationType} onChange={event => setOperationType(event.target.value as OperationType)}>{Object.entries(operationNames).map(([value, label]) => <option key={value} value={value} disabled={value === 'inpaint' && !inpaintAllowed}>{label}</option>)}</select>
+              <button type="button" disabled={operationType === 'inpaint' && (!inpaintAllowed || inpaintAdded)} onClick={newOperation}>Aggiungi</button>
             </div>
-            {invalidOperations && <p className="notice error" role="alert">Verifica gli estremi e le frequenze degli interventi. Per i micro-gap scegli High e rispetta la durata massima.</p>}
+            {invalidOperations && <p className="notice error" role="alert">Verifica gli estremi e le frequenze degli interventi. Per le ricostruzioni verifica il profilo, il contesto e la durata della regione.</p>}
             <button type="button" className="primary" disabled={busy || invalidOperations || !operations.some(op => !op.bypass)} onClick={() => void onRestore(profile, operations).then(ok => { if (ok) setTab('versions') })}>Genera anteprima</button>
             <details className="inset">
               <summary>Preset personali</summary>
@@ -352,6 +378,9 @@ export function Inspector({ asset, versions, analysis, selectedEvent, region, bu
                 <li key={version.id} className="inset">
                   <div className="version-meta"><strong>{versionKinds[version.kind] ?? version.kind}</strong><small>{versionStatuses[version.status]}</small></div>
                   <p>{version.name}</p>
+                  {Boolean(version.metadata.generated_regions?.length) && <p className="hint">
+                    Contiene audio generato. Ascolta la patch prima di approvarla.
+                  </p>}
                   <div className="wrap-actions">
                     <button type="button" aria-pressed={version.id === asset.id} onClick={() => onSelectAsset(version)}>Seleziona</button>
                     <button type="button" disabled={version.status === 'rejected'} onClick={() => onListen(version)}>Ascolta</button>

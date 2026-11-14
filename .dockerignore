@@ -31,3 +31,9 @@
 !packages/model_adapters/_vendor/**/*.py
 !packages/model_adapters/_vendor/**/LICENSE*
 !packages/model_adapters/_vendor/**/THIRD_PARTY.md
+!configs/inpainting/
+!configs/inpainting/*.json
+!packages/inpainting/_vendor/
+!packages/inpainting/_vendor/**/
+!packages/inpainting/_vendor/**/*.py
+!packages/inpainting/_vendor/**/LICENSE*

@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import { API, assetPath, formatTime, stemNames } from './api'
 import type { AudioAsset, Metric, Region } from './api'
+import { useLiveMix } from './liveMix'
+import type { LiveMixConfig } from './liveMixTypes'
 
 function readDb(metrics?: Record<string, Metric>) {
   if (!metrics) return {}
@@ -32,7 +34,7 @@ function cleanError(error: unknown) {
   return error instanceof Error ? error.message : 'Impossibile avviare l’ascolto.'
 }
 
-export function useTransport(projectId: string, region: Region | null) {
+function useAssetTransport(projectId: string, region: Region | null) {
   const audio = useRef<HTMLAudioElement>(null)
   const activeSource = useRef<AudioAsset>(undefined)
   const pendingSeek = useRef(0)
@@ -63,15 +65,20 @@ export function useTransport(projectId: string, region: Region | null) {
     setPosition(requested)
   }
 
+  function audioPosition() {
+    const previous = activeSource.current
+    return previous && audio.current && audio.current.readyState > 0
+      ? Math.round(audio.current.currentTime * previous.metadata.sample_rate) + (previous.metadata.start_sample ?? 0)
+      : pendingSeek.current
+  }
+
   function select(asset: AudioAsset, sample?: number, resume = playing) {
     if (!audio.current) return
-    const previous = activeSource.current
-    const currentSample = sample ?? (previous && audio.current.readyState > 0
-      ? Math.round(audio.current.currentTime * previous.metadata.sample_rate) + (previous.metadata.start_sample ?? 0)
-      : pendingSeek.current)
+    const currentSample = sample ?? audioPosition()
     if (activeSource.current?.id === asset.id) {
       seek(currentSample)
       if (resume) void audio.current.play().catch(error => setError(cleanError(error)))
+      else audio.current.pause()
       return
     }
     const start = asset.metadata.start_sample ?? 0
@@ -186,7 +193,67 @@ export function useTransport(projectId: string, region: Region | null) {
     }
   }, [loop, region])
 
-  return { audio, active, position, playing, waiting, loop, setLoop, volume, setVolume, error, select, seek, toggle, stop, loadedMetadata }
+  return { audio, active, position, playing, waiting, loop, setLoop, volume, setVolume, error, select, seek, toggle, stop, loadedMetadata, audioPosition }
+}
+
+export function useTransport(projectId: string, region: Region | null, config: LiveMixConfig) {
+  const [liveMode, setLiveMode] = useState(false)
+  const liveActive = useRef(false)
+  const media = useAssetTransport(projectId, liveMode ? null : region)
+  const live = useLiveMix(projectId, config, media.loop && liveMode ? region : null, media.volume)
+
+  function select(asset: AudioAsset, sample?: number, resume = liveActive.current ? live.state.playing : media.playing) {
+    if (liveActive.current) {
+      sample ??= live.position()
+      liveActive.current = false
+      setLiveMode(false)
+      live.pause()
+    }
+    media.select(asset, sample, resume)
+  }
+
+  function startLive() {
+    if (!config.tracks.length || (liveActive.current && live.state.playing)) return
+    const sample = liveActive.current ? live.position() : media.audioPosition()
+    media.audio.current?.pause()
+    liveActive.current = true
+    setLiveMode(true)
+    live.play(sample, media.loop ? region : null)
+  }
+
+  function toggle() {
+    if (!liveActive.current) {
+      media.toggle()
+    } else if (live.state.playing) {
+      live.pause()
+    } else {
+      live.play()
+    }
+  }
+
+  function stop() {
+    if (liveActive.current) {
+      live.pause()
+      live.seek(0)
+    } else {
+      media.stop()
+    }
+  }
+
+  function seek(sample: number) {
+    if (liveActive.current) live.seek(sample)
+    else media.seek(sample)
+  }
+
+  return {
+    ...media, select, seek, toggle, stop, startLive, liveMode, liveState: live.state,
+    active: liveMode ? undefined : media.active,
+    ready: liveMode ? config.tracks.length > 0 : Boolean(media.active),
+    position: liveMode ? live.state.position : media.position,
+    playing: liveMode ? live.state.playing : media.playing,
+    waiting: liveMode ? live.state.buffering : media.waiting,
+    error: liveMode ? live.state.error : media.error,
+  }
 }
 
 export type Transport = ReturnType<typeof useTransport>
@@ -199,7 +266,7 @@ export function TransportBar({ transport, sampleCount, sampleRate, region, basel
   baseline?: Source
   candidate?: Source
 }) {
-  const { active, audio, position, playing, waiting, loop, setLoop, volume, setVolume, error, select, seek, toggle, stop, loadedMetadata } = transport
+  const { active, ready, audio, position, playing, waiting, loop, setLoop, volume, setVolume, error, select, seek, toggle, stop, loadedMetadata, liveMode, liveState } = transport
   const [matched, setMatched] = useState(false)
   const levels = comparisonLevels(baseline, candidate)
   const matchMethod = levels?.label
@@ -219,7 +286,14 @@ export function TransportBar({ transport, sampleCount, sampleRate, region, basel
   }, [volume, attenuation, audio])
 
   const offset = active?.metadata.start_sample ?? 0
-  const canLoop = Boolean(active && region && region.start_sample >= offset && region.end_sample <= offset + active.metadata.sample_count)
+  const canLoop = Boolean(region && (liveMode
+    ? ready && region.start_sample >= 0 && region.end_sample <= sampleCount
+    : active && region.start_sample >= offset && region.end_sample <= offset + active.metadata.sample_count))
+  const monitorName = liveMode ? 'Mix live' : active ? stemNames[active.stem] : 'Monitor'
+  const liveStatus = liveMode && liveState.deviceRate
+    ? `Contesto audio ${liveState.deviceRate} Hz · progetto ${sampleRate} Hz · interruzioni ${liveState.underruns}`
+    : undefined
+
 
   function compare(source?: Source) {
     if (source) select(source.asset)
@@ -230,21 +304,21 @@ export function TransportBar({ transport, sampleCount, sampleRate, region, basel
       <audio ref={audio} preload="metadata" onLoadedMetadata={loadedMetadata} />
       <div className="transport-main">
         <div className="button-cluster">
-          <button className="play-button" type="button" disabled={!active} onClick={toggle} aria-label={playing ? 'Pausa' : 'Riproduci'} title="Spazio">{playing ? 'Ⅱ' : '▶'}</button>
-          <button className="icon-button" type="button" disabled={!active} onClick={stop} aria-label="Stop">■</button>
+          <button className="play-button" type="button" disabled={!ready} onClick={toggle} aria-label={playing ? 'Pausa' : 'Riproduci'} title="Spazio">{playing ? 'Ⅱ' : '▶'}</button>
+          <button className="icon-button" type="button" disabled={!ready} onClick={stop} aria-label="Stop">■</button>
           <button className="loop-button" type="button" disabled={!canLoop} aria-pressed={loop && canLoop} onClick={() => setLoop(!loop)} title={canLoop ? 'Ripeti la regione selezionata' : 'Seleziona una regione coperta dalla traccia in ascolto'}>Loop</button>
         </div>
         <output className="timecode" aria-label="Posizione riproduzione">{formatTime(position, sampleRate)}<small> / {formatTime(sampleCount, sampleRate)}</small></output>
-        <div className="monitor-source">
-          <span className={'status-dot' + (playing ? ' active' : '')} aria-hidden="true" />
-          <span>{waiting ? 'Buffering…' : active ? stemNames[active.stem] : 'Monitor'}</span>
+        <div className="monitor-source" role="status" title={liveStatus}>
+          <span className={'status-dot' + (playing && !waiting ? ' active' : '')} aria-hidden="true" />
+          <span>{monitorName}{waiting ? ' · Buffering…' : ''}</span>
         </div>
         <div className="button-cluster ab-controls" aria-label="Ascolto A/B">
           <button type="button" disabled={!baseline} aria-pressed={Boolean(baseline && currentIsBaseline)} title={baseline?.asset.name ?? 'Versione sorgente non disponibile'} onClick={() => compare(baseline)}>A</button>
           <button type="button" disabled={!candidate} aria-pressed={Boolean(candidate && currentIsCandidate)} title={candidate?.asset.name ?? 'Versione restaurata non disponibile'} onClick={() => compare(candidate)}>B</button>
         </div>
         <label className="match-control" title={matchMethod ? `Abbinamento in ${matchMethod}, applicato al solo monitor` : 'Servono misure confrontabili sulle due versioni'}>
-          <input type="checkbox" checked={Boolean(matchMethod && matched)} disabled={!matchMethod} onChange={event => setMatched(event.target.checked)} /> Abbina {matchMethod || 'livello'}
+          <input type="checkbox" checked={Boolean(!liveMode && matchMethod && matched)} disabled={liveMode || !matchMethod} onChange={event => setMatched(event.target.checked)} /> Abbina {matchMethod || 'livello'}
         </label>
         <label className="volume-control">
           <span>Monitor</span>
@@ -252,7 +326,7 @@ export function TransportBar({ transport, sampleCount, sampleRate, region, basel
           <output>{Math.round(volume * 100)}%</output>
         </label>
       </div>
-      {sampleCount > 0 && <input className="transport-seek" type="range" aria-label="Posizione in campioni" min={0} max={sampleCount} step={1} value={position} disabled={!active} onChange={event => seek(Number(event.target.value))} />}
+      {sampleCount > 0 && <input className="transport-seek" type="range" aria-label="Posizione in campioni" min={0} max={sampleCount} step={1} value={position} disabled={!ready} onChange={event => seek(Number(event.target.value))} />}
       {error && <p className="notice error" role="alert">{error}</p>}
     </section>
   )

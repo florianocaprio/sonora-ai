@@ -36,3 +36,15 @@ docker compose down
 ```
 
 `doctor` può mostrare `node` e `pnpm` assenti nel runtime. La build web avviene nello stage Node e l'immagine finale contiene gli asset già compilati. La build e il flusso con checkpoint reale sono verificati su `linux/arm64`. Il lock include anche wheel CPU `linux/amd64`, che resta da collaudare. Usa il portale sulla porta pubblicata e lascia i controlli Host e Origin attivi. [Pubblicazione porte Docker](https://docs.docker.com/engine/network/port-publishing/)
+
+## Inpainting e monitor
+
+L'immagine include il motore per l'[inpainting High](INPAINTING.md), il [limiter del master](LIMITER.md) e il bundle AudioWorklet per il [mix live](LIVE_MIX.md). L'inpainting usa il checkpoint per pianoforte dalla cache `models`. L'installazione iniziale pesa circa 713 MB.
+
+```sh
+docker compose up --build -d --wait
+docker compose exec worker python -m services.cli models install diffusion-inpaint
+docker compose exec worker python -m services.cli models verify diffusion-inpaint
+```
+
+Il monitor live usa Web Audio in Chromium da localhost. Il limiter agisce durante il render del master.

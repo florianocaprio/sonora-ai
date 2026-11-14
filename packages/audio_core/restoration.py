@@ -2,6 +2,7 @@
 
 from pathlib import Path
 import tempfile
+from typing import Callable
 
 import numpy as np
 from scipy import signal
@@ -165,7 +166,8 @@ def _apply_region(source: Path, destination: Path, operation: dict,
 
 
 def restore(source: Path, destination: Path, operations: list[dict], *,
-            progress: Progress = None, cancelled: Cancelled = None) -> dict:
+            progress: Progress = None, cancelled: Cancelled = None,
+            neural: Callable[[Path, Path, dict], dict] | None = None) -> dict:
     """Apply ordered operations without touching samples outside their declared regions."""
     if not isinstance(operations, list) or len(operations) > MAX_OPERATIONS:
         raise ValueError(f"Specificare fino a {MAX_OPERATIONS} interventi ordinati.")
@@ -180,6 +182,7 @@ def restore(source: Path, destination: Path, operations: list[dict], *,
             active.append(operation)
     frames = sf.info(source).frames
     completed = []
+    generated = []
     has_active = bool(active)
     total = frames * max(1, len(active))
     with tempfile.TemporaryDirectory(prefix=".restore-", dir=destination.parent) as scratch:
@@ -188,10 +191,22 @@ def restore(source: Path, destination: Path, operations: list[dict], *,
         current = source
         for index, operation in enumerate(active):
             target = Path(scratch) / f"{index}.wav"
-            info = _apply_region(current, target, operation,
-                                 (lambda done, _, index=index: progress(index * frames + done, total)) if progress else None,
-                                 cancelled)
-            operation_info = info.pop("operation")
+            if operation.get("type") == "inpaint":
+                if neural is None:
+                    raise ValueError("L’inpainting richiede un adattatore neurale locale.")
+                provenance = neural(current, target, operation)
+                with sf.SoundFile(target) as audio:
+                    info = audio_info(audio)
+                region = {key: operation[key] for key in ("start_sample", "end_sample")}
+                generated.append(dict(provenance, **region, classification="generated"))
+                operation_info = {**operation, "classification": "generated"}
+                if progress:
+                    progress((index + 1) * frames, total)
+            else:
+                info = _apply_region(current, target, operation,
+                                     (lambda done, _, index=index: progress(index * frames + done, total)) if progress else None,
+                                     cancelled)
+                operation_info = info.pop("operation")
             if has_active:
                 completed.append(operation_info)
             if index:
@@ -199,7 +214,7 @@ def restore(source: Path, destination: Path, operations: list[dict], *,
             current = target
         check_cancel(cancelled)
         target.replace(destination)
-    return {**info, "operations": completed, "algorithm_version": VERSION, "reconstructed_regions": [
+    return {**info, "operations": completed, "algorithm_version": VERSION, "generated_regions": generated, "reconstructed_regions": [
         {"start_sample": operation["start_sample"], "end_sample": operation["end_sample"],
          "algorithm": "linear_interpolation"}
         for operation in completed if operation["classification"] == "reconstructed" and operation["changed_frames"]

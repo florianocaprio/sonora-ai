@@ -8,6 +8,7 @@ Il codice originale SONORA AI ha licenza di distribuzione da confermare. I compo
 | DBS-TIGER-DnR checkpoint | Apache-2.0 secondo la [scheda del modello](https://huggingface.co/JusperLee/DBS-TIGER-DnR) |
 | Bandit V2 codice | Apache-2.0. [Licenza incorporata](packages/model_adapters/_vendor/bandit/LICENSE) |
 | Bandit V2 checkpoint | CC BY-SA 4.0 secondo il [record Zenodo](https://zenodo.org/records/12701995) |
+| Diffusion-Based Audio Inpainting | Codice e checkpoint MIT secondo gli autori. Il codice della trasformata CQT è dichiarato MIT e le parti derivate da NSGT conservano Artistic-2.0 e le attribuzioni di Thomas Grill e NUHAG. [Licenze incluse](packages/inpainting/_vendor/) · [Provenienza](docs/INPAINTING.md) |
 | PyTorch / Torchaudio | BSD-3-Clause secondo le licenze dei [sorgenti PyTorch](https://github.com/pytorch/pytorch) e [Torchaudio](https://github.com/pytorch/audio) |
 | Safetensors / einops | Apache-2.0 / MIT. [Safetensors](https://github.com/huggingface/safetensors), [einops](https://github.com/arogozhnikov/einops) |
 | NumPy / SciPy | BSD-3-Clause. [NumPy](https://numpy.org/doc/stable/license.html), [SciPy](https://scipy.org/) |

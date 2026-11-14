@@ -133,13 +133,14 @@ def create_app(settings: Settings | None = None):
 
     @router.get("/models")
     def models():
-        from packages.model_adapters import list_models
+        from services.model_catalog import list_models
 
         return list_models(settings.models)
 
     @router.get("/models/{model_id}/verify")
     def verify(model_id: str):
-        from packages.model_adapters import ModelUnavailable, verify_model
+        from packages.model_adapters import ModelUnavailable
+        from services.model_catalog import verify_model
 
         try:
             return verify_model(settings.models, model_id)
@@ -247,6 +248,10 @@ def create_app(settings: Settings | None = None):
     def separate(project_id: str, body: Separate, idempotency_key: Annotated[str | None, Header(max_length=160)] = None):
         if asset_and_region(project_id, body)["kind"] != "original":
             raise ValueError("Seleziona una versione Originale da separare.")
+        from packages.inpainting import MODEL_ID
+
+        if body.model_id == MODEL_ID:
+            raise ValueError("Questo modello è dedicato all’inpainting nel profilo High.")
         return store().enqueue(project_id, "separate", body.model_dump(), idempotency_key)
 
     @router.post("/projects/{project_id}/analyze", status_code=202)
@@ -261,6 +266,19 @@ def create_app(settings: Settings | None = None):
             raise ValueError("Seleziona un originale o uno stem completo e approvato.")
         if any(operation.end_sample > asset["metadata"]["sample_count"] for operation in body.operations):
             raise ValueError("Il piano supera la durata dell'asset.")
+        active_inpaint = next((op for op in body.operations if op.type == "inpaint" and not op.bypass), None)
+        if active_inpaint:
+            from packages.inpainting import MAX_GAP_MS, MIN_GAP_MS, MIN_SIDE_MS
+
+            rate = asset["metadata"]["sample_rate"]
+            frames = active_inpaint.end_sample - active_inpaint.start_sample
+            if asset["stem"] != "music":
+                raise ValueError("Il modello neurale attuale è dedicato a regioni di pianoforte nello stem Musica.")
+            if not MIN_GAP_MS * rate <= 1000 * frames <= MAX_GAP_MS * rate:
+                raise ValueError(f"Seleziona una regione da {MIN_GAP_MS} a {MAX_GAP_MS} ms per l’inpainting.")
+            context = min(active_inpaint.start_sample, asset["metadata"]["sample_count"] - active_inpaint.end_sample)
+            if context * 1000 < MIN_SIDE_MS * rate:
+                raise ValueError(f"Lascia almeno {MIN_SIDE_MS} ms di contesto ai due lati della regione.")
         return store().enqueue(project_id, "restore", body.model_dump(), idempotency_key)
 
     @router.post("/projects/{project_id}/mix", status_code=202)
@@ -288,6 +306,21 @@ def create_app(settings: Settings | None = None):
     def media(project_id: str, asset_id: str):
         asset = store().asset(project_id, asset_id)
         return FileResponse(store().local_path(asset["path"]), media_type="audio/wav")
+
+    @router.get("/projects/{project_id}/assets/{asset_id}/pcm", response_class=Response,
+                responses={200: {"content": {"application/octet-stream": {}},
+                                 "description": "PCM float32 little-endian interlacciato · massimo 131072 frame"}})
+    def pcm(project_id: str, asset_id: str, start_sample: Annotated[int, Query(ge=0)],
+            frames: Annotated[int, Query(ge=1, le=131072)]):
+        import soundfile as sf
+
+        asset = store().asset(project_id, asset_id)
+        with sf.SoundFile(store().local_path(asset["path"])) as audio:
+            if start_sample >= audio.frames:
+                raise HTTPException(416, "Il campione richiesto è oltre la fine dell’asset.")
+            audio.seek(start_sample)
+            signal = audio.read(frames, dtype="float32", always_2d=True)
+        return Response(signal.astype("<f4", copy=False).tobytes(), media_type="application/octet-stream")
 
     @router.get("/projects/{project_id}/assets/{asset_id}/source")
     def original_source(project_id: str, asset_id: str):

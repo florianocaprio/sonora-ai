@@ -59,11 +59,19 @@ class Analyze(AssetJob):
 
 
 class Operation(Region):
-    type: Literal["dc_remove", "dehum", "declick", "peq", "microgap"]
+    type: Literal["dc_remove", "dehum", "declick", "peq", "microgap", "inpaint"]
     end_sample: FirstEndSample
     wet: float = Field(default=1, ge=0, le=1)
     bypass: bool = False
     params: dict[str, float] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def validate_inpainting(self):
+        if self.type == "inpaint":
+            seed = self.params.get("seed", 0)
+            if self.wet != 1 or self.params.keys() - {"seed"} or not 0 <= seed <= 2**31 - 1 or seed != int(seed):
+                raise ValueError("L’inpainting richiede sostituzione completa della maschera e un seed intero da 0 a 2147483647.")
+        return self
 
 
 class Restore(Contract):
@@ -73,8 +81,10 @@ class Restore(Contract):
 
     @model_validator(mode="after")
     def validate_profile(self):
-        if self.profile != "high" and any(op.type == "microgap" and not op.bypass for op in self.operations):
-            raise ValueError("Seleziona High per la ricostruzione dei micro-gap.")
+        if self.profile != "high" and any(op.type in {"microgap", "inpaint"} and not op.bypass for op in self.operations):
+            raise ValueError("Seleziona High per la ricostruzione.")
+        if sum(op.type == "inpaint" and not op.bypass for op in self.operations) > 1:
+            raise ValueError("Genera una patch neurale alla volta.")
         return self
 
 
@@ -102,8 +112,15 @@ class Track(Channel):
     automation: dict[str, list[dict]] | None = None
 
 
+class Limiter(Contract):
+    enabled: bool = False
+    lookahead_ms: float = Field(default=5, ge=1, le=20)
+    release_ms: float = Field(default=80, ge=10, le=1000)
+
+
 class Master(Channel):
     ceiling_dbtp: float | None = Field(default=None, ge=-30, le=0)
+    limiter: Limiter | None = None
 
 
 class Mix(Contract):
