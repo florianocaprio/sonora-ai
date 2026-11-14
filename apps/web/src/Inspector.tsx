@@ -201,7 +201,8 @@ export function Inspector({ asset, versions, inpaintModel, analysis, selectedEve
   const [severityFilter, setSeverityFilter] = useState('')
   const [eventPage, setEventPage] = useState(0)
   const [profile, setProfile] = useState<Profile>('basic')
-  const [operations, setOperations] = useState<Operation[]>([])
+  const [chains, setChains] = useState<Record<Profile, Operation[]>>({ basic: [], medium: [], high: [] })
+  const operations = chains[profile]
   const [operationType, setOperationType] = useState<OperationType>('dc_remove')
   const [planName, setPlanName] = useState('')
   const [presets, setPresets] = useState(readPresets)
@@ -226,19 +227,28 @@ export function Inspector({ asset, versions, inpaintModel, analysis, selectedEve
   const maxGap = inpaintModel?.max_gap_ms ?? 250
   const sideContext = inpaintModel?.min_context_ms_per_side ?? 250
   const inpaintAdded = operations.some(op => op.type === 'inpaint' && !op.bypass)
+  const selectedOperation = (operationType === 'inpaint' && !inpaintAllowed) || (operationType === 'microgap' && profile !== 'high')
+    ? 'dc_remove' : operationType
+
+  function setOperations(next: Operation[]) {
+    setChains(previous => ({ ...previous, [profile]: next }))
+  }
+
+  function appendOperation(targetProfile: Profile, operation: Operation) {
+    setChains(previous => ({ ...previous, [targetProfile]: [...previous[targetProfile], operation] }))
+  }
 
   function newOperation() {
     const start = Math.ceil(sampleRate * sideContext / 1000)
-    const target = selection ?? (operationType === 'inpaint'
+    const target = selection ?? (selectedOperation === 'inpaint'
       ? { start_sample: start, end_sample: start + Math.floor(sampleRate * Math.min(100, maxGap) / 1000) }
       : { start_sample: 0, end_sample: sampleCount })
-    if (operationType === 'microgap') setProfile('high')
-    setOperations([...operations, {
+    appendOperation(profile, {
       ...target,
-      type: operationType,
+      type: selectedOperation,
       wet: 1,
-      params: Object.fromEntries(parameters[operationType].map(param => [param.key, param.initial])),
-    }])
+      params: Object.fromEntries(parameters[selectedOperation].map(param => [param.key, param.initial])),
+    })
   }
 
   async function suggestPlan() {
@@ -255,7 +265,7 @@ export function Inspector({ asset, versions, inpaintModel, analysis, selectedEve
   function storePreset() {
     if (!asset || !planName.trim()) return
     const name = planName.trim()
-    const next = [...presets.filter(preset => preset.name !== name || preset.stem !== asset.stem), { name, stem: asset.stem, profile, operations }]
+    const next = [...presets.filter(preset => preset.name !== name || preset.stem !== asset.stem || preset.profile !== profile), { name, stem: asset.stem, profile, operations }]
     try {
       localStorage.setItem(presetsKey, JSON.stringify(next))
       setPresets(next)
@@ -267,9 +277,8 @@ export function Inspector({ asset, versions, inpaintModel, analysis, selectedEve
   }
 
   function usePreset(name: string) {
-    const preset = presets.find(item => item.name === name && item.stem === asset?.stem)
+    const preset = presets.find(item => item.name === name && item.stem === asset?.stem && item.profile === profile)
     if (!preset) return
-    setProfile(preset.profile)
     setOperations(preset.operations.map(op => {
       if (!selection) return { ...op, end_sample: Math.min(op.end_sample, sampleCount) }
       const end = op.type === 'microgap' || op.type === 'inpaint'
@@ -285,14 +294,14 @@ export function Inspector({ asset, versions, inpaintModel, analysis, selectedEve
     const proposedType = typeof proposal === 'string' ? proposal : proposal?.type
     if (proposedType && proposedType in parameters) {
       const type = proposedType as OperationType
+      const targetProfile = type === 'microgap' || type === 'inpaint' ? 'high' : type === 'peq' ? 'medium' : profile
       const defaults = Object.fromEntries(parameters[type].map(param => [param.key, param.initial]))
-      setOperations(prev => [...prev, {
+      appendOperation(targetProfile, {
         type, start_sample: defect.start_sample, end_sample: defect.end_sample,
         wet: typeof proposal === 'object' && proposal ? proposal.wet ?? 1 : 1,
         params: typeof proposal === 'object' && proposal ? { ...defaults, ...proposal.params } : defaults,
-      }])
-      if (type === 'microgap') setProfile('high')
-      if (type === 'peq') setProfile('medium')
+      })
+      setProfile(targetProfile)
     }
   }
 
@@ -309,10 +318,27 @@ export function Inspector({ asset, versions, inpaintModel, analysis, selectedEve
     op.wet < 0 || op.wet > 1 || (op.type === 'microgap' && !op.bypass && (profile !== 'high' || (op.end_sample - op.start_sample) / sampleRate * 1000 > (op.params.max_duration_ms ?? 20))) ||
     (op.type === 'inpaint' && !op.bypass && invalidInpaint(op)) ||
     (typeof op.params.frequency_hz === 'number' && op.params.frequency_hz > Math.floor(sampleRate * 0.49)))
+  const activeOperations = operations.filter(op => !op.bypass).length
+  const needsConfiguration = !activeOperations || invalidOperations
+
+  async function startRestoration() {
+    if (needsConfiguration) {
+      setTab('restoration')
+      return
+    }
+    if (await onRestore(profile, operations)) setTab('versions')
+  }
 
   return (
     <aside className="panel inspector" aria-label="Inspector">
       <header className="panel-heading"><h2>Inspector</h2>{asset && <span className={`track-chip track-${asset.stem}`}>{stemNames[asset.stem]}</span>}</header>
+      <div className="restoration-action panel-flow">
+        <button type="button" className="primary" aria-describedby="restoration-status" disabled={busy || !canRestore || (tab === 'restoration' && needsConfiguration)} onClick={() => void startRestoration()}>Avvia restauro</button>
+        <p className="hint" id="restoration-status">{!canRestore ? 'Seleziona un originale o uno stem completo e approvato.'
+          : invalidOperations ? `${profiles[profile]} · Verifica la catena in Restauro.`
+          : activeOperations ? `${profiles[profile]} · ${activeOperations} ${activeOperations === 1 ? 'intervento attivo' : 'interventi attivi'}`
+          : `${profiles[profile]} · Aggiungi o proponi una catena in Restauro.`}</p>
+      </div>
       <div className="inspector-tabs" aria-label="Pannello inspector">
         <button type="button" aria-pressed={tab === 'analysis'} onClick={() => setTab('analysis')}>Difetti</button>
         <button type="button" aria-pressed={tab === 'restoration'} onClick={() => setTab('restoration')}>Restauro</button>
@@ -355,13 +381,12 @@ export function Inspector({ asset, versions, inpaintModel, analysis, selectedEve
                 : 'Installa il modello di inpainting dalla pagina Modelli.'}
             </p>}
             <button type="button" disabled={busy} onClick={() => void suggestPlan()}>Proponi catena</button>
-            <Operations operations={operations} rate={sampleRate} maxSample={sampleCount} onChange={setOperations} />
+            <Operations key={profile} operations={operations} rate={sampleRate} maxSample={sampleCount} onChange={setOperations} />
             <div className="field-action">
-              <select aria-label="Processore di restauro" value={operationType} onChange={event => setOperationType(event.target.value as OperationType)}>{Object.entries(operationNames).map(([value, label]) => <option key={value} value={value} disabled={value === 'inpaint' && !inpaintAllowed}>{label}</option>)}</select>
-              <button type="button" disabled={operationType === 'inpaint' && (!inpaintAllowed || inpaintAdded)} onClick={newOperation}>Aggiungi</button>
+              <select aria-label="Processore di restauro" value={selectedOperation} onChange={event => setOperationType(event.target.value as OperationType)}>{Object.entries(operationNames).map(([value, label]) => <option key={value} value={value} disabled={(value === 'inpaint' && !inpaintAllowed) || (value === 'microgap' && profile !== 'high')}>{label}</option>)}</select>
+              <button type="button" disabled={busy || (selectedOperation === 'inpaint' && inpaintAdded)} onClick={newOperation}>Aggiungi</button>
             </div>
             {invalidOperations && <p className="notice error" role="alert">Verifica gli estremi e le frequenze degli interventi. Per le ricostruzioni verifica il profilo, il contesto e la durata della regione.</p>}
-            <button type="button" className="primary" disabled={busy || invalidOperations || !operations.some(op => !op.bypass)} onClick={() => void onRestore(profile, operations).then(ok => { if (ok) setTab('versions') })}>Genera anteprima</button>
             <details className="inset">
               <summary>Preset personali</summary>
               <div className="panel-flow">
@@ -369,7 +394,7 @@ export function Inspector({ asset, versions, inpaintModel, analysis, selectedEve
                   <input aria-label="Nome preset" value={planName} maxLength={64} placeholder="Nome preset" onChange={event => setPlanName(event.target.value)} />
                   <button type="button" disabled={!operations.length || !planName.trim()} onClick={storePreset}>Salva</button>
                 </div>
-                <select aria-label="Carica preset" value="" onChange={event => usePreset(event.target.value)}><option value="">Carica su regione o traccia</option>{presets.filter(item => item.stem === asset.stem).map(item => <option key={item.name} value={item.name}>{item.name}</option>)}</select>
+                <select aria-label="Carica preset" value="" onChange={event => usePreset(event.target.value)}><option value="">Carica su regione o traccia</option>{presets.filter(item => item.stem === asset.stem && item.profile === profile).map(item => <option key={item.name} value={item.name}>{item.name}</option>)}</select>
                 {presetError && <p className="notice error" role="alert">{presetError}</p>}
               </div>
             </details>
