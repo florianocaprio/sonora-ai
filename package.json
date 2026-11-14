@@ -1,0 +1,14 @@
+{
+  "name": "sonora-ai",
+  "private": true,
+  "packageManager": "pnpm@10.34.5",
+  "scripts": {
+    "build": "pnpm --filter @sonora/web build",
+    "typecheck": "pnpm --filter @sonora/web typecheck",
+    "test": "bash scripts/test.sh",
+    "test:e2e": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.65.1"
+  }
+}

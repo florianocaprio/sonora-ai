@@ -1,0 +1,45 @@
+name: sonora-ai
+
+x-service: &service
+  image: sonora-ai:local-cpu
+  init: true
+  stop_grace_period: 30s
+  cap_drop: [ALL]
+  security_opt:
+    - no-new-privileges:true
+  environment:
+    SONORA_DATA_DIR: /var/lib/sonora/data
+    SONORA_MODEL_DIR: /var/lib/sonora/models
+    SONORA_PORT: "8765"
+  volumes:
+    - projects:/var/lib/sonora/data
+    - models:/var/lib/sonora/models
+
+services:
+  api:
+    <<: *service
+    build:
+      context: .
+    ports:
+      - "127.0.0.1:8765:8765"
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8765/api/v1/health', timeout=5).close()"
+      interval: 10s
+      timeout: 8s
+      retries: 6
+      start_period: 20s
+
+  worker:
+    <<: *service
+    command: ["python", "-m", "services.worker"]
+    depends_on:
+      api:
+        condition: service_healthy
+
+volumes:
+  projects:
+  models:

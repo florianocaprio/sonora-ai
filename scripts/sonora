@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+set -euo pipefail
+cd "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+if [[ -x .sonora/tools/bin/ffmpeg && -x .sonora/tools/bin/ffprobe ]]; then
+  export PATH="$(pwd)/.sonora/tools/bin:$PATH"
+fi
+if [[ -n "${SONORA_PYTHON:-}" ]]; then
+  python="$SONORA_PYTHON"
+elif [[ -x .venv/bin/python ]]; then
+  python=.venv/bin/python
+else
+  python=python3
+fi
+exec "$python" -m services.cli "$@"

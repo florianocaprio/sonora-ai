@@ -1,0 +1,7 @@
+{
+  "name": "@workspace/api-server",
+  "private": true,
+  "scripts": {
+    "test": "cd ../.. && bash scripts/test.sh"
+  }
+}
