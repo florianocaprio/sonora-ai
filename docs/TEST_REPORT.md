@@ -28,4 +28,6 @@ SONORA_TEST_MODEL=dbs-tiger-dnr SONORA_TEST_BACKEND=mps scripts/test.sh
 
 Usa `SONORA_TEST_BACKEND=cpu` per ripetere su CPU. I test reali riportano un salto motivato se backend o pesi mancano. Per il browser, installa Chromium con `pnpm exec playwright install chromium`, avvia lo studio ed esegui `SONORA_E2E_MODEL=dbs-tiger-dnr SONORA_E2E_BACKEND=mps pnpm run test:e2e`. Imposta `SONORA_E2E_URL` se hai cambiato porta. I test browser creano progetti di prova nell'archivio in uso. Usa un `SONORA_DATA_DIR` temporaneo per tenerli separati.
 
-Restano da verificare file di durata cinematografica, browser diversi da Chromium, un corpus più ampio e il Mac M5 Max indicato nel brief.
+Il rilascio live/High/mastering ha superato typecheck e build. La suite standard ha eseguito 47 test, con 44 superati e 3 saltati perché richiedono checkpoint. Il test con checkpoint di inpainting è stato eseguito a parte su macOS e Docker Linux ARM64.
+
+Per il nuovo percorso live/High/mastering vedi il [collaudo integrale di Sintel](FILM_QA.md). Restano da verificare lungometraggi, browser diversi da Chromium, un corpus più ampio e il Mac M5 Max indicato nel brief.
