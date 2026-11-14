@@ -224,6 +224,7 @@ button.project-name { border: 0; background: transparent; display: flex; text-al
 
 .inspector { min-height: 340px; }
 .inspector .panel-heading { min-height: 48px; }
+.restoration-action { padding: 0.65rem 0.75rem; border-bottom: 1px solid var(--line); }
 .track-chip { border: 1px solid var(--line-strong); color: var(--track); border-radius: 4px; padding: 0.22rem 0.35rem; font-size: 0.67rem; }
 .inspector-tabs { display: grid; grid-template-columns: repeat(3, 1fr); border-bottom: 1px solid var(--line); padding: 0.35rem; gap: 0.25rem; }
 .inspector-tabs button { background: transparent; border-color: transparent; color: var(--muted); }
